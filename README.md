@@ -121,5 +121,3 @@ MIT License - 详见 [LICENSE](LICENSE)
 - PDF 导出基于 ReportLab
 - 思维导图基于 Matplotlib
 - 设计灵感来自 Ai好记、BiliNote 等同类产品
-
-> AI生成
