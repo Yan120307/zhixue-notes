@@ -246,6 +246,33 @@
     background: var(--brand-soft); color: var(--brand-ink); white-space: nowrap; font-weight: 500;
   }
   .nc-badge.demo { background: var(--surface-2); color: var(--muted); }
+  .nc-badge.ai { background: linear-gradient(135deg, #7C3AED, #DB2777); color: #fff; font-weight: 600; }
+
+  /* 笔记预览弹窗 */
+  #previewModal {
+    display: none; position: fixed; inset: 0; z-index: 90;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(2px);
+    align-items: center; justify-content: center; padding: 24px;
+  }
+  #previewModal.show { display: flex; }
+  .preview-box {
+    background: var(--surface); border-radius: 18px; max-width: 780px; width: 100%;
+    max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: var(--shadow-lg); border: 1px solid var(--line);
+  }
+  .preview-head {
+    padding: 16px 22px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center; font-weight: 600;
+  }
+  .preview-close {
+    border: none; background: none; font-size: 22px; cursor: pointer;
+    color: var(--muted); line-height: 1; padding: 4px;
+  }
+  .preview-close:hover { color: var(--ink); }
+  .preview-body {
+    padding: 22px 26px; overflow-y: auto; font-size: 14px; line-height: 1.75;
+    color: var(--ink); white-space: pre-wrap; word-break: break-word;
+  }
   .nc-body { display: none; padding: 0 20px 18px; border-top: 1px dashed var(--line); margin: 0 0; }
   .note-card.open .nc-body { display: block; animation: fadeIn 0.25s ease; }
   .nc-body p { color: var(--muted); font-size: 13.5px; margin: 12px 0 4px; }
@@ -486,6 +513,15 @@
   </main>
 </div>
 <div id="toast"></div>
+<div id="previewModal">
+  <div class="preview-box">
+    <div class="preview-head">
+      <span id="previewTitle">笔记预览</span>
+      <button class="preview-close" onclick="closePreview()">×</button>
+    </div>
+    <div class="preview-body" id="previewBody">加载中…</div>
+  </div>
+</div>
 
 <script>
 (function () {
@@ -682,7 +718,8 @@
       demo: false,
       files: result.files || {},
       points: result.points || 0,
-      chapters: result.chapters || 0
+      chapters: result.chapters || 0,
+      llm: result.llm_enhanced || false
     };
     notes.unshift(note);
     save(LS.notes, notes);
@@ -713,17 +750,41 @@
     runProcess(text, type);
   });
 
+  /* ---------- 笔记搜索 ---------- */
+  var searchInput = null;
+  function renderSearch() {
+    if (searchInput) return;
+    var sec = document.querySelector(".notes-sec");
+    var si = document.createElement("input");
+    si.type = "text"; si.id = "noteSearch";
+    si.placeholder = "搜索笔记（标题/来源/类型）…";
+    si.style.cssText = "width:100%;padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font-size:13.5px;margin-bottom:12px;font-family:inherit;outline:none;";
+    si.addEventListener("input", function () { renderNotes(); });
+    sec.insertBefore(si, $("#notesList"));
+    searchInput = si;
+  }
+
+  function getSearchQuery() {
+    return searchInput ? searchInput.value.trim().toLowerCase() : "";
+  }
+
   /* ---------- 笔记列表渲染 ---------- */
   function renderNotes() {
     var box = $("#notesList");
-    $("#noteCount").textContent = notes.length ? "共 " + notes.length + " 份" : "";
-    if (!notes.length) {
+    var q = getSearchQuery();
+    renderSearch();
+    var filtered = q ? notes.filter(function (n) {
+      return (n.title + " " + n.src + " " + n.type).toLowerCase().indexOf(q) >= 0;
+    }) : notes;
+    $("#noteCount").textContent = notes.length ? "共 " + notes.length + " 份" + (q && filtered.length < notes.length ? "（筛选出 " + filtered.length + " 份）" : "") : "";
+    if (!filtered.length) {
       box.innerHTML = '<div class="empty-state">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h7"/></svg>' +
-        '<div class="big">还没有笔记</div>粘贴一个学习资源链接，开始第一次整理</div>';
+        '<div class="big">' + (q ? "没有匹配的笔记" : "还没有笔记") + "</div>" +
+        (q ? "换个关键词试试" : "粘贴一个学习资源链接，开始第一次整理") + "</div>";
       return;
     }
-    box.innerHTML = notes.map(function (n) {
+    box.innerHTML = filtered.map(function (n) {
       var fmts = n.fmts.map(function (f) { return FMT_NAME[f] || f; }).join(" · ");
       var isDemo = n.demo;
       var filesHtml = "";
@@ -734,11 +795,12 @@
         }).join("");
       }
       var meta = n.points ? n.points + " 个知识点 · " + n.chapters + " 章" : "";
+      var aiBadge = n.llm ? '<span class="nc-badge ai">AI 增强</span>' : "";
       return '<div class="note-card" data-id="' + n.id + '">' +
         '<div class="nc-head">' +
           '<span class="nc-badge">' + esc(n.type) + "</span>" +
           '<span class="nc-title">' + esc(n.title) + "</span>" +
-          '<span class="nc-meta">' + fmtTime(n.time) +
+          '<span class="nc-meta">' + fmtTime(n.time) + aiBadge +
           (isDemo ? '<span class="nc-badge demo">演示</span>' : '<span class="nc-badge">已生成</span>') + '</span>' +
         "</div>" +
         '<div class="nc-body">' +
@@ -746,7 +808,8 @@
           "<p><b>交付格式</b>　" + esc(fmts) + (meta ? " · " + esc(meta) : "") + "</p>" +
           (isDemo ? "<p>本条为<b>演示数据</b>，正式整理能力已接入，整理完成后这里将展示下载链接。</p>" :
            "<p><b>交付文件</b>　" + filesHtml + "</p>" +
-           "<p>通俗解释与多平台补充需通过 TeleAgent 助手增强（发送笔记给助手触发 video-note-master 技能）。</p>") +
+           '<p><button class="btn-ghost" style="margin:0;padding:5px 14px;font-size:12.5px;" onclick="previewNote(\'' + n.id + '\')">在线预览笔记</button></p>' +
+           (n.llm ? "<p>已由大模型生成通俗解释与考点提炼。</p>" : "<p>配置 DASHSCOPE_API_KEY 环境变量可启用 AI 通俗解释。</p>")) +
         "</div></div>";
     }).join("");
     $$("#notesList .nc-head").forEach(function (h) {
@@ -828,6 +891,25 @@
     save(LS.notes, notes); save(LS.profile, profile); save(LS.settings, settings);
     renderAll();
     toast("已恢复出厂（含演示数据）");
+  });
+
+  /* ---------- 笔记在线预览 ---------- */
+  window.previewNote = function (taskId) {
+    var modal = $("#previewModal");
+    $("#previewBody").textContent = "加载中…";
+    modal.classList.add("show");
+    fetch("http://127.0.0.1:8766/api/read?id=" + taskId + "&file=notes.md")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        $("#previewBody").textContent = data.content || "无法读取笔记";
+        var note = notes.find(function (n) { return n.id === taskId; });
+        $("#previewTitle").textContent = note ? note.title : "笔记预览";
+      })
+      .catch(function () { $("#previewBody").textContent = "无法连接后端服务（请确认 server.py 正在运行）"; });
+  };
+  window.closePreview = function () { $("#previewModal").classList.remove("show"); };
+  $("#previewModal").addEventListener("click", function (e) {
+    if (e.target === $("#previewModal")) closePreview();
   });
 
   /* ---------- 初始化 ---------- */

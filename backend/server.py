@@ -26,6 +26,9 @@ import time
 import urllib.parse
 import uuid
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from llm import llm_available, llm_enhance_note, llm_generate_summary
+
 # 技能脚本目录
 _cfg = os.environ.get("TELEAGENT_CONFIG_DIR", os.path.expanduser("~/.config/TeleAgent"))
 # TELEAGENT_CONFIG_DIR 已含完整用户路径（如 .../TeleAgent/users/v1_xxx）
@@ -78,16 +81,22 @@ def fetch_subtitles(url, out_dir, type_key):
     if not os.path.exists(script):
         return False, None, "字幕抓取脚本不存在"
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, script, url, "--out-dir", out_dir, "--fmt", "srt"],
-            capture_output=True, text=True, timeout=120, encoding="utf-8")
-        if result.returncode == 0:
-            for f in os.listdir(out_dir):
-                if f.endswith(".srt"):
-                    return True, os.path.join(out_dir, f), result.stdout[-500:]
-            return False, None, "字幕抓取成功但未找到文件"
-        return False, None, (result.stderr or result.stdout or "抓取失败")[-500:]
-    except subprocess.TimeoutExpired:
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=0x00000008 if os.name == "nt" else 0)
+        start = time.time()
+        while time.time() - start < 120:
+            rc = proc.poll()
+            if rc is not None:
+                if rc == 0:
+                    for f in os.listdir(out_dir):
+                        if f.endswith(".srt"):
+                            return True, os.path.join(out_dir, f), "ok"
+                    return False, None, "字幕抓取成功但未找到文件"
+                return False, None, "returncode=%s" % rc
+            time.sleep(0.5)
+        proc.kill()
         return False, None, "字幕抓取超时（120秒）"
     except Exception as e:
         return False, None, str(e)
@@ -176,7 +185,10 @@ def build_notes_md(kmap, srt_items, source_url, fmts):
     lines.append("")
     lines.append("## 概述")
     lines.append("")
-    lines.append("本笔记由智学笔记平台自动整理，涵盖以下核心内容。")
+    if kmap.get("llm_summary") and kmap["llm_summary"].get("overview"):
+        lines.append(kmap["llm_summary"]["overview"])
+    else:
+        lines.append("本笔记由智学笔记平台自动整理，涵盖以下核心内容。")
     lines.append("")
     lines.append("### 核心知识图谱")
     lines.append("")
@@ -198,6 +210,9 @@ def build_notes_md(kmap, srt_items, source_url, fmts):
                 lines.append("")
             lines.append("**核心要点**：%s" % p.get("summary", ""))
             lines.append("")
+            if p.get("one_liner"):
+                lines.append("**一句话掌握**：%s" % p["one_liner"])
+                lines.append("")
             if srt_items and p.get("start_sec"):
                 nearby = [t for s, t in srt_items if abs(s - p["start_sec"]) < 60]
                 if nearby:
@@ -205,20 +220,49 @@ def build_notes_md(kmap, srt_items, source_url, fmts):
                     for t in nearby[:3]:
                         lines.append("> %s" % t)
                     lines.append("")
-            lines.append("**通俗解释**：（需助手增强 - 将此笔记发送给 TeleAgent 触发 video-note-master 技能可补充通俗解释与多平台内容）")
-            lines.append("")
+            if p.get("plain_explain"):
+                lines.append("**通俗解释**：")
+                lines.append("")
+                lines.append(p["plain_explain"])
+                lines.append("")
+            else:
+                lines.append("**通俗解释**：（配置 DASHSCOPE_API_KEY 环境变量可自动生成 AI 通俗解释）")
+                lines.append("")
         lines.append("---")
         lines.append("")
     lines.append("## 重点考点清单")
     lines.append("")
-    lines.append("### 必背概念")
+    if kmap.get("llm_summary") and kmap["llm_summary"].get("exam_points"):
+        lines.append("### 必背考点（AI 生成）")
+        for ep in kmap["llm_summary"]["exam_points"]:
+            lines.append("- [ ] %s" % ep)
+        lines.append("")
+    lines.append("### 核心概念")
     for ch in kmap.get("chapters", []):
         for p in ch.get("points", []):
             lines.append("- [ ] %s" % p["title"])
     lines.append("")
-    lines.append("> 本笔记由智学笔记平台自动生成，通俗解释与多平台深度补充需通过 TeleAgent 触发 video-note-master 技能完成。")
+    lines.append("> 本笔记由智学笔记平台自动生成。配置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY 环境变量可启用 AI 通俗解释与考点提炼。")
     lines.append("> AI生成")
     return "\n".join(lines)
+
+
+def _run_script(cmd, timeout=90):
+    """安全运行脚本：Popen + 轮询，永不阻塞主流程"""
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=0x00000008 if os.name == "nt" else 0)  # DETACHED_PROCESS
+        start = time.time()
+        while time.time() - start < timeout:
+            rc = proc.poll()
+            if rc is not None:
+                return rc == 0
+            time.sleep(0.5)
+        proc.kill()
+        return False
+    except Exception:
+        return False
 
 
 def export_pdf(md_path, out_pdf, img_base=None):
@@ -226,21 +270,12 @@ def export_pdf(md_path, out_pdf, img_base=None):
     cmd = [sys.executable, script, md_path, "-o", out_pdf]
     if img_base:
         cmd += ["--img-base", img_base]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8")
-        return r.returncode == 0, (r.stdout or r.stderr)[-300:]
-    except Exception as e:
-        return False, str(e)
+    return _run_script(cmd, timeout=60), ""
 
 
 def gen_mindmap(kmap_path, out_png):
     script = os.path.join(SCRIPTS, "gen_mindmap.py")
-    try:
-        r = subprocess.run([sys.executable, script, kmap_path, "-o", out_png],
-                           capture_output=True, text=True, timeout=60, encoding="utf-8")
-        return r.returncode == 0, (r.stdout or r.stderr)[-300:]
-    except Exception as e:
-        return False, str(e)
+    return _run_script([sys.executable, script, kmap_path, "-o", out_png], timeout=60), ""
 
 
 def process_task(task_id, url, fmts, type_info):
@@ -276,6 +311,21 @@ def process_task(task_id, url, fmts, type_info):
         update(3, "该资源类型暂不支持自动抓取，请使用 TeleAgent 助手处理")
 
     kmap = basic_extract(srt_items, title="%s整理笔记" % title_prefix)
+
+    # LLM 增强（配置了 API Key 时自动启用）
+    llm_on = llm_available()
+    if llm_on and srt_items:
+        update(4, "大模型增强中：通俗解释 + 考点提炼…")
+        excerpt = " ".join(t for _, t in srt_items)[:4000]
+        enhanced = llm_enhance_note(kmap, transcript_excerpt=excerpt, source_url=url)
+        if enhanced:
+            kmap = enhanced
+        summary = llm_generate_summary(excerpt, url)
+        if summary:
+            kmap["llm_summary"] = summary
+    else:
+        update(4, "未配置大模型 API Key，使用基础提炼")
+
     kmap_path = os.path.join(task_dir, "knowledge_map.json")
     with open(kmap_path, "w", encoding="utf-8") as f:
         json.dump(kmap, f, ensure_ascii=False, indent=2)
@@ -304,11 +354,12 @@ def process_task(task_id, url, fmts, type_info):
         if ok and os.path.exists(mm_path):
             files["思维导图.png"] = "mindmap.png"
 
-    update(7, "整理完成！", done=True, result={
+    update(7, "整理完成！" + ("（含 AI 通俗解释）" if llm_on else ""), done=True, result={
         "title": kmap.get("course_title", "学习笔记"),
         "files": files,
         "points": sum(len(c.get("points", [])) for c in kmap.get("chapters", [])),
-        "chapters": len(kmap.get("chapters", []))
+        "chapters": len(kmap.get("chapters", [])),
+        "llm_enhanced": bool(kmap.get("llm_enhanced"))
     })
 
 
