@@ -474,6 +474,10 @@
           </div>
         </div>
         <div class="quick-row" id="quickRow">
+          <button class="quick" id="btnUpload">📁 选择或拖入 视频/音频文件（无字幕也能转写整理）</button>
+          <input type="file" id="fileInput" accept=".mp4,.mkv,.mov,.avi,.webm,.flv,.m4a,.mp3,.wav,.aac,.flac" style="display:none">
+        </div>
+        <div class="quick-row">
           <button class="quick" data-demo="https://www.runoob.com/python3/python3-intro.html">试一试：网页文章</button>
           <button class="quick" data-demo="机器学习三步骤：第一步定义模型集合，例如线性模型 y = w * x + b，其中 w 是权重、b 是偏置；第二步定义损失函数 Loss，衡量模型预测值与真实值的差距，例如均方误差 MSE；第三步梯度下降 Optimization，沿负梯度方向迭代更新参数 w，学习率 eta 控制每一步的步长。当模型太简单时会欠拟合 Underfitting，训练与测试误差都很大；模型太复杂会过拟合 Overfitting，训练误差小但测试误差大。解决过拟合的常用方法有 L1/L2 正则化、Dropout 和数据增强。神经网络由多个 Neuron 层层叠加而成，Deep Learning 因此得名；反向传播算法利用链式法则逐层计算梯度，是训练神经网络的核心。">试一试：粘贴一段文字</button>
           <button class="quick" data-demo="https://www.bilibili.com/video/BV1ib411t7YR">试一试：B站视频（需有CC字幕）</button>
@@ -896,6 +900,52 @@
     if (!text) { toast("请先粘贴资源链接或输入内容"); input.focus(); return; }
     var type = detectType(text);
     runProcess(text, type);
+  });
+
+  /* ---------- 本地音视频文件上传整理 ---------- */
+  function uploadFile(file) {
+    if (busy) { toast("正在整理中，请稍候"); return; }
+    busy = true;
+    var btn = $("#btnGo");
+    btn.disabled = true; btn.firstChild.textContent = "整理中…";
+    buildPipeline();
+    $("#pipeline").classList.add("show");
+    resetPipelineState();
+    startPipeTimer();
+    setPipelineProgress(1, "正在上传「" + file.name + "」（" + (file.size / 1048576).toFixed(1) + " MB）…");
+    $("#pipeline").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    var fd = new FormData();
+    fd.append("file", file);
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", API + "/api/upload");
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) {
+        var pct = e.loaded * 100 / e.total;
+        setPipelineProgress(1 + pct * 0.07, "上传中 " + Math.round(pct) + "%（" +
+          (e.loaded / 1048576).toFixed(1) + " / " + (e.total / 1048576).toFixed(1) + " MB）");
+      }
+    };
+    xhr.onload = function () {
+      var r;
+      try { r = JSON.parse(xhr.responseText); } catch (e) { r = null; }
+      if (!r || r.error) { failFinish((r && r.error) || "上传失败，请重试"); return; }
+      pollStatus(r.task_id, "本地文件：" + r.filename, { name: "视频/音频文件", key: "local_video" });
+    };
+    xhr.onerror = function () { failFinish("上传失败，请确认本地服务已启动"); };
+    xhr.send(fd);
+  }
+
+  $("#btnUpload").addEventListener("click", function () { $("#fileInput").click(); });
+  $("#fileInput").addEventListener("change", function (e) {
+    if (e.target.files && e.target.files[0]) uploadFile(e.target.files[0]);
+    e.target.value = "";
+  });
+  document.addEventListener("dragover", function (e) { e.preventDefault(); });
+  document.addEventListener("drop", function (e) {
+    e.preventDefault();
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) uploadFile(f);
   });
 
   /* ---------- 笔记搜索 ---------- */

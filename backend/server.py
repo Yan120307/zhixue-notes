@@ -692,16 +692,81 @@ def process_task(task_id, url, fmts, type_info):
             srt_items = [(0, s) for s in sents]
             title = re.sub(r"\s+", " ", url.strip())[:24]
             update(3, "已接收 %d 句内容，正在提炼重点…" % len(sents), progress=45)
+    elif type_key == "local_video":
+        # 本地上传的音视频文件 → 征得同意后直接本地转写（不涉及下载）
+        src_path = url  # process_task 收到的 url 即磁盘上的源文件绝对路径
+        fname = type_info.get("name") or os.path.basename(src_path)
+        size_mb = os.path.getsize(src_path) / 1048576 if os.path.exists(src_path) else 0
+        confirm_msg = (
+            "将用本地模型转写「%s」（约 %.0f MB，预计约为时长的 1/3），"
+            "全程不上传任何内容；笔记生成后源文件会自动删除。\n\n是否继续？" % (
+                fname[:40], size_mb))
+        with _lock:
+            _tasks[task_id]["need_confirm"] = {"message": confirm_msg}
+        update(2, "等待确认：是否本地转写该文件？", progress=10)
+        ev = _tasks[task_id].get("confirm_event")
+        got = ev.wait(timeout=900) if ev else False
+        with _lock:
+            _tasks[task_id]["need_confirm"] = None
+            agreed = _tasks[task_id].get("confirm_agree")
+        if not got:
+            fail = "长时间未确认，已自动取消"
+        elif not agreed:
+            fail = "已按您的选择取消转写。"
+        else:
+            update(2, "已确认，开始本地转写…", progress=15)
+            if type_info.get("name"):
+                title = type_info["name"]
+            try:
+                sys.path.insert(0, SCRIPTS)
+                import transcribe_audio as _ta
+                prog = os.path.join(task_dir, "transcode_progress.json")
+                import threading as _th
+                stop_flag = {"v": False}
+                def _watch():
+                    last = ""
+                    while not stop_flag["v"]:
+                        try:
+                            if os.path.exists(prog):
+                                with open(prog, "r", encoding="utf-8") as f:
+                                    pr = json.load(f)
+                                msg = pr.get("message") or ""
+                                pct = min(100.0, float(pr.get("percent") or 0))
+                                if msg != last:
+                                    last = msg
+                                    update(3, msg, progress=15 + pct * 0.30)
+                        except Exception:
+                            pass
+                        time.sleep(2)
+                _t = _th.Thread(target=_watch, daemon=True)
+                _t.start()
+                srt_out, n = _ta.transcribe(src_path, task_dir, None)
+                stop_flag["v"] = True
+                srt_items = parse_srt(srt_out)
+                update(3, "转写完成，共 %d 条，正在提炼重点…" % len(srt_items), progress=45)
+                if len(srt_items) < 8:
+                    fail = "转写内容过少（%d 条），可能该文件无语音内容" % len(srt_items)
+            except Exception as e:
+                stop_flag["v"] = True
+                fail = "本地转写失败：%s" % str(e)[:100]
+            finally:
+                stop_flag["v"] = True
+            # 用户约定：转写后删除上传的源文件（原始文件仍在用户手中）
+            try:
+                if os.path.exists(src_path):
+                    os.remove(src_path)
+            except Exception:
+                pass
     elif type_key == "pan":
         # 网盘链接：识别成功但自动下载受网盘限制，给出可操作的引导
         u = (url or "").lower()
         if "nwafu" in u or ".edu.cn" in u:
-            fail = ("已识别到校园网盘分享（该网盘通常仅校园网可达，自动下载受限）。\n"
-                    "建议：① 在校园网打开链接下载视频；② 复制视频文稿/字幕粘贴到输入框，"
-                    "即可自动整理出笔记")
+            fail = ("已识别到校园网盘分享（该网盘在当前网络无法直接访问）。\n"
+                    "建议：① 下载视频后拖入平台，自动转写整理出完整笔记；"
+                    "② 复制视频文稿/字幕粘贴到输入框")
         else:
-            fail = ("已识别到网盘分享链接。网盘文件暂不支持自动下载。\n"
-                    "建议：① 下载后把视频文件拖入整理；② 复制视频文稿/字幕粘贴到输入框")
+            fail = ("已识别到网盘分享链接，网盘文件暂不支持自动下载。\n"
+                    "建议：① 下载后把视频/音频文件拖入平台整理；② 复制文稿粘贴到输入框")
     else:  # pdf / doc
         fail = "PDF / Word 文档暂不支持自动抓取，请复制文档文字后粘贴到输入框"
 
@@ -859,6 +924,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if ev:
                 ev.set()
             self._json(200, {"ok": True, "agree": agree})
+            return
+        if path == "/api/upload":
+            # 本地音视频文件上传：multipart 解析，存任务目录后进入转写整理流程
+            ctype = self.headers.get("Content-Type", "")
+            m = re.search(r"boundary=(.+)", ctype)
+            if not m:
+                self._json(400, {"error": "无效的上传请求"})
+                return
+            boundary = ("--" + m.group(1).strip()).encode()
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 1024 * 1024 * 1024:
+                self._json(413, {"error": "文件超过 1GB 上限，请裁剪或压缩后重试"})
+                return
+            body = self.rfile.read(length)
+            for part in body.split(boundary):
+                if b"filename=" not in part:
+                    continue
+                header_blob, _, data = part.partition(b"\r\n\r\n")
+                if data.endswith(b"\r\n"):
+                    data = data[:-2]
+                hm = re.search(rb'filename="([^"]+)"', header_blob)
+                if not hm or not data:
+                    continue
+                fname = hm.group(1).decode("utf-8", "ignore")
+                ext = os.path.splitext(fname)[1].lower()
+                if ext not in (".mp4", ".mkv", ".avi", ".mov", ".flv", ".webm", 
+                               ".m4a", ".mp3", ".wav", ".aac", ".flac"):
+                    self._json(400, {"error": "仅支持音视频文件（mp4/mkv/mov/mp3/wav 等）"})
+                    return
+                task_id = "t" + uuid.uuid4().hex[:12]
+                task_dir = os.path.join(TASKS_DIR, task_id)
+                os.makedirs(task_dir, exist_ok=True)
+                src = os.path.join(task_dir, "source_media" + ext)
+                with open(src, "wb") as f:
+                    f.write(data)
+                size_mb = len(data) / 1048576
+                with _lock:
+                    _tasks[task_id] = {
+                        "id": task_id, "step": 0, "log": "文件已接收", "done": False,
+                        "ts": time.time(), "url": fname[:300], "type": "视频/音频文件",
+                        "typeKey": "local_video", "fmts": [],
+                        "confirm_event": threading.Event(),
+                        "confirm_agree": None, "need_confirm": None
+                    }
+                threading.Thread(target=process_task, daemon=True, args=(
+                    task_id, src, ["md", "pdf", "mindmap"],
+                    {"key": "local_video", "name": fname[:40]})).start()
+                self._json(200, {"task_id": task_id, "filename": fname,
+                                 "size_mb": round(size_mb, 1)})
+                return
+            self._json(400, {"error": "未找到上传文件"})
             return
         if path == "/api/export/anki":
             # 按需生成 Anki 卡片：POST {"id": <任务ID>}

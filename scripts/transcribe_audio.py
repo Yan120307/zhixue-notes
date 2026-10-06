@@ -182,12 +182,23 @@ def srt_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def _load_model():
+    """加载转写模型：优先纯离线（模型已缓存时绝不联网检查更新，
+    避免网络抖动导致 ConnectError）；无缓存时再联网下载"""
+    from faster_whisper import WhisperModel
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    try:
+        return WhisperModel("small", device="cpu", compute_type="int8")
+    except Exception:
+        # 本地无缓存，联网下载（首次使用需要网络）
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        return WhisperModel("small", device="cpu", compute_type="int8")
+
+
 def transcribe(audio_path, task_dir, progress):
     """faster-whisper 转写，实时写进度文件，输出 srt"""
-    from faster_whisper import WhisperModel
-
     write_progress(task_dir, "transcribe", 0, "加载转写模型（small）…")
-    model = WhisperModel("small", device="cpu", compute_type="int8")
+    model = _load_model()
 
     # VAD 过滤静音，显著提速
     segments, info = model.transcribe(
