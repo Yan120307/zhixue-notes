@@ -1,0 +1,10 @@
+# 统一换行符策略
+* text=auto
+
+# Windows 批处理必须保持 CRLF，否则 cmd 解析会出错
+*.bat text eol=crlf
+
+# 二进制文件不做任何转换
+*.png binary
+*.jpg binary
+*.pdf binary

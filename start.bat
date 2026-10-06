@@ -1,51 +1,139 @@
 @echo off
-chcp 65001 >nul
-title æ™ºå­¦ç¬”è®°å¹³å°
+setlocal enabledelayedexpansion
+title ÖÇÑ§±Ê¼ÇÆ½Ì¨
+cd /d "%~dp0"
+
 echo ============================================
-echo          æ™ºå­¦ç¬”è®°å¹³å° å¯åŠ¨ä¸­...
+echo          ÖÇÑ§±Ê¼ÇÆ½Ì¨ Æô¶¯ÖÐ...
 echo ============================================
 echo.
 
-:: æ£€æŸ¥ Python
-where python >nul 2>&1
-if errorlevel 1 (
-    echo [é”™è¯¯] æœªæ‰¾åˆ° Pythonï¼Œè¯·å…ˆå®‰è£…: https://www.python.org/downloads/
+rem ============================================================
+rem 1. ¶¨Î»¿ÉÓÃµÄ Python£¨ÒÀ´Î³¢ÊÔÒÔÏÂÀ´Ô´£©
+rem    - Windows ÉÌµêµÄ python.exe ÊÇ 0 ×Ö½ÚÕ¼Î»±ðÃû£¬ÔËÐÐÎÞÊä³ö£¬
+rem      ÏÂÃæµÄÌ½²â»á×Ô¶¯ÅÅ³ýËü
+rem ============================================================
+set "PY="
+
+rem 1.1 py Æô¶¯Æ÷£¨Windows ×Ô´ø£¬Ö¸ÏòÒÑ°²×°µÄ Python£©
+where py >nul 2>&1
+if not errorlevel 1 (
+    for /f "delims=" %%i in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+)
+
+rem 1.2 python / python3 ÃüÁî£¨ÕæÊµ¿ÉÔËÐÐµÄ²ÅËãÊý£©
+if not defined PY (
+    where python >nul 2>&1
+    if not errorlevel 1 (
+        for /f "delims=" %%i in ('python -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+    )
+)
+if not defined PY (
+    where python3 >nul 2>&1
+    if not errorlevel 1 (
+        for /f "delims=" %%i in ('python3 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
+    )
+)
+
+rem 1.3 ³£¼û°²×°Â·¾¶
+if not defined PY (
+    for %%d in ("%LocalAppData%\Programs\Python\Python*\python.exe" "%ProgramFiles%\Python\Python*\python.exe" "C:\Python*\python.exe" "C:\develop\python\python.exe") do (
+        if exist %%d set "PY=%%~d"
+    )
+)
+
+rem 1.4 ±¾»úÄÚÖÃ Python£¨TeleAgent ÔËÐÐÊ±¶µµ×£¬ÎÞÐè°²×°£©
+if not defined PY (
+    if exist "C:\Users\windows\.local\share\TeleAgent\runtimes\python\python.exe" set "PY=C:\Users\windows\.local\share\TeleAgent\runtimes\python\python.exe"
+)
+
+rem ×îÖÕÑéÖ¤£º±ØÐëÕæµÄÄÜÖ´ÐÐ£¨ÔÙ´ÎÅÅ³ýÕ¼Î»±ðÃû£©
+if defined PY (
+    "%PY%" -c "import sys" >nul 2>&1
+    if errorlevel 1 set "PY="
+)
+
+if not defined PY (
+    echo.
+    echo [´íÎó] Î´ÕÒµ½¿ÉÓÃµÄ Python »·¾³¡£
+    echo        ±¾»úÖ»ÓÐ Windows ÉÌµêµÄ Python Õ¼Î»Ó¦ÓÃ£¬
+    echo        ÇëÏÈ°²×° Python 3.8+£¬È»ºóÖØÐÂË«»÷±¾½Å±¾¡£
+    echo.
+    start "" "https://www.python.org/downloads/"
     pause
     exit /b 1
 )
 
-:: é¦–æ¬¡è¿è¡Œè‡ªåŠ¨å®‰è£…ä¾èµ–
-python -c "import requests, reportlab, matplotlib" >nul 2>&1
+echo [ÐÅÏ¢] Ê¹ÓÃ Python: %PY%
+echo.
+
+rem ============================================================
+rem 2. ÒÀÀµ¼ì²éÓëÊ×´Î°²×°
+rem ============================================================
+"%PY%" -c "import requests, reportlab, matplotlib" >nul 2>&1
 if errorlevel 1 (
-    echo [é¦–æ¬¡è¿è¡Œ] æ­£åœ¨å®‰è£…ä¾èµ–åº“ï¼Œè¯·ç¨å€™...
-    python -m pip install requests reportlab matplotlib --quiet
-    echo [å®Œæˆ] ä¾èµ–å®‰è£…å®Œæˆ
-    echo.
+    echo [Ê×´ÎÔËÐÐ] ÕýÔÚ°²×°ÒÀÀµ¿â£¨requests / reportlab / matplotlib£©...
+    echo           ÇëÄÍÐÄµÈ´ý£¬¿ÉÄÜÐèÒª¼¸·ÖÖÓ¡£
+    "%PY%" -m pip install requests reportlab matplotlib --quiet
+    if errorlevel 1 (
+        echo.
+        echo [´íÎó] ÒÀÀµ°²×°Ê§°Ü£¬Çë¼ì²éÍøÂçºóÖØÐÂË«»÷±¾½Å±¾¡£
+        pause
+        exit /b 1
+    )
+    echo [Íê³É] ÒÀÀµ°²×°Íê³É
 )
 
-:: å¯åŠ¨åŽç«¯æœåŠ¡ï¼ˆ8766 ç«¯å£ï¼‰
-echo [1/3] å¯åŠ¨åŽç«¯æœåŠ¡...
-start /min "" python "%~dp0backend\server.py" --port 8766
+rem ============================================================
+rem 3. Æô¶¯·þÎñ£¨¶Ë¿ÚÒÑ±»Õ¼ÓÃÊ±×Ô¶¯Ìø¹ý£¬±ÜÃâÖØ¸´Æô¶¯£©
+rem ============================================================
+echo [1/3] ¼ì²éºó¶Ë·þÎñ£¨¶Ë¿Ú 8766£©...
+powershell -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient;try{$c.Connect('127.0.0.1',8766);exit 0}catch{exit 1}" >nul 2>&1
+if errorlevel 1 (
+    start /min "" "%PY%" "%~dp0backend\server.py" --port 8766
+    echo       ºó¶Ë·þÎñÆô¶¯ÖÐ...
+) else (
+    echo       ºó¶Ë·þÎñÒÑÔÚÔËÐÐ£¬Ìø¹ý
+)
 
-:: å¯åŠ¨å‰ç«¯é™æ€æœåŠ¡ï¼ˆ8765 ç«¯å£ï¼‰
-echo [2/3] å¯åŠ¨å‰ç«¯æœåŠ¡...
-start /min "" python -m http.server 8765 --bind 127.0.0.1 --directory "%~dp0frontend"
+echo [2/3] ¼ì²éÇ°¶Ë·þÎñ£¨¶Ë¿Ú 8765£©...
+powershell -NoProfile -Command "$c=New-Object Net.Sockets.TcpClient;try{$c.Connect('127.0.0.1',8765);exit 0}catch{exit 1}" >nul 2>&1
+if errorlevel 1 (
+    start /min "" "%PY%" -m http.server 8765 --bind 127.0.0.1 --directory "%~dp0frontend"
+    echo       Ç°¶Ë·þÎñÆô¶¯ÖÐ...
+) else (
+    echo       Ç°¶Ë·þÎñÒÑÔÚÔËÐÐ£¬Ìø¹ý
+)
 
-:: ç­‰å¾…æœåŠ¡å°±ç»ª
-timeout /t 3 /nobreak >nul
+rem ============================================================
+rem 4. µÈ´ýÁ½¸ö·þÎñ¾ÍÐ÷£¨×î¶à 20 Ãë£©
+rem ============================================================
+echo [3/3] µÈ´ý·þÎñ¾ÍÐ÷...
+for /l %%i in (1,1,20) do (
+    powershell -NoProfile -Command "$ok=$true;foreach($p in 8765,8766){$c=New-Object Net.Sockets.TcpClient;try{$c.Connect('127.0.0.1',$p)}catch{$ok=$false};$c.Close()};if($ok){exit 0}else{exit 1}" >nul 2>&1
+    if not errorlevel 1 goto :ready
+    timeout /t 1 /nobreak >nul
+)
+echo.
+echo [´íÎó] ·þÎñÆô¶¯³¬Ê±¡£³£¼ûÔ­Òò£º
+echo        1. É±¶¾Èí¼þÀ¹½ØÁË Python ½ø³Ì
+echo        2. ·À»ðÇ½×èÖ¹ÁË±¾»ú¶Ë¿Ú
+echo  Çë³¢ÊÔÊÖ¶¯Æô¶¯£ºcd backend ^&^& python server.py
+pause
+exit /b 1
 
-:: æ‰“å¼€æµè§ˆå™¨
-echo [3/3] æ­£åœ¨æ‰“å¼€æµè§ˆå™¨...
+:ready
+echo [¾ÍÐ÷] ·þÎñÒÑ¾ÍÐ÷£¬ÕýÔÚ´ò¿ªä¯ÀÀÆ÷...
 start "" "http://127.0.0.1:8765/index.html"
 
 echo.
 echo ============================================
-echo   å¹³å°å·²å¯åŠ¨ï¼æµè§ˆå™¨æœªè‡ªåŠ¨æ‰“å¼€æ—¶è¯·è®¿é—®:
-echo   http://127.0.0.1:8765/index.html
-echo ============================================
+echo   Æ½Ì¨ÒÑÆô¶¯£¡
+echo   ·ÃÎÊµØÖ·: http://127.0.0.1:8765/index.html
 echo.
-echo   å…³é—­æœ¬çª—å£ä¸ä¼šå½±å“å¹³å°è¿è¡Œ
-echo   è¦åœæ­¢æœåŠ¡: å…³é—­ä¸¤ä¸ªæœ€å°åŒ–çš„ Python çª—å£
-echo   æˆ–æ‰“å¼€ä»»åŠ¡ç®¡ç†å™¨ç»“æŸ python è¿›ç¨‹
+echo   ¹Ø±Õ±¾´°¿Ú²»»áÓ°ÏìÆ½Ì¨ÔËÐÐ
+echo   Í£Ö¹·þÎñ: ¹Ø±ÕÁ½¸ö×îÐ¡»¯µÄ Python ´°¿Ú
+echo   »òÈÎÎñ¹ÜÀíÆ÷½áÊø python ½ø³Ì
+echo ============================================
 echo.
 pause
