@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '2575d356-81fa-4a77-b654-93b92ec929e7'
-  PropagateID: '2575d356-81fa-4a77-b654-93b92ec929e7'
-  ReservedCode1: '90107a88-d8a5-481a-8ef2-dadc038ec729'
-  ReservedCode2: '90107a88-d8a5-481a-8ef2-dadc038ec729'
+  ProduceID: '2390b159-d47d-4be7-bc82-41b958a45ad5'
+  PropagateID: '2390b159-d47d-4be7-bc82-41b958a45ad5'
+  ReservedCode1: '876c6d8f-b45d-4276-9062-c68eb5cc8a6f'
+  ReservedCode2: '876c6d8f-b45d-4276-9062-c68eb5cc8a6f'
 ---
 
 # 智学笔记 (ZhiXue Notes)
@@ -23,10 +23,10 @@ AIGC:
 [![python](https://img.shields.io/badge/Python-3.8+-blue.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![html](https://img.shields.io/badge/HTML5-CSS3-JS-orange.svg?style=flat-square&logo=html5&logoColor=white)](https://developer.mozilla.org/)
 [![platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)]()
-[![release](https://img.shields.io/badge/Release-v1.1-blueviolet.svg?style=flat-square)]()
+[![release](https://img.shields.io/badge/Release-v1.2-blueviolet.svg?style=flat-square)]()
 [![issues](https://img.shields.io/github/issues/Yan120307/zhixue-notes.svg?style=flat-square&color=orange)](https://github.com/Yan120307/zhixue-notes/issues)
 
-**[功能特性](#-功能特性) · [效果展示](#-效果展示) · [快速开始](#-快速开始) · [配置大模型](#-配置大模型可选) · [API 文档](#-api-文档) · [路线图](#-路线图)**
+**[功能特性](#-功能特性) · [效果展示](#-效果展示) · [快速开始](#-快速开始) · [配置大模型](#-配置大模型可选) · [学习工具集成](#-学习工具集成) · [API 文档](#-api-文档) · [路线图](#-路线图)**
 
 </div>
 
@@ -41,12 +41,19 @@ AIGC:
 - **AI 通俗解释**（可选） — 接入通义千问 / OpenAI，每个知识点生成「一句话掌握」+「生活化通俗解释」
 - **AI 考点提炼**（可选） — 自动生成 5-8 个必背考点清单
 
-### 交付格式（三件套）
+### 交付格式（四件套）
 | 格式 | 说明 |
 |---|---|
 | **Markdown** | 结构化笔记源文件 |
 | **PDF** | 中文友好排版，内嵌截图与表格 |
 | **思维导图 PNG** | 横向树布局，按章节自动配色 |
+| **Anki 卡片 TSV** | 知识点自动制卡，导入即背 |
+
+### 学习工具链
+- **Anki 间隔记忆** — 笔记卡片一键导出 TSV，Anki 导入即开始间隔重复
+- **Obsidian 知识库** — 一键写入 Vault，自动生成 MOC 索引页
+- **视频关键帧截图** — 安装 playwright 后自动启用，重点画面嵌入 PDF
+- **网盘文件浏览** — 网盘分享链接自动列出文件清单
 
 ### 平台特色
 - **简洁大气 UI** — 浅/深双主题、响应式布局、荧光笔签名设计
@@ -70,10 +77,23 @@ AIGC:
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.8+（Docker 部署可跳过 Python）
 - 现代浏览器（Chrome / Edge / Firefox）
 
-### 一分钟启动
+### 方式一：Docker 一键部署（推荐）
+
+```bash
+git clone https://github.com/Yan120307/zhixue-notes.git
+cd zhixue-notes
+docker compose up -d
+# 浏览器打开 http://localhost:8765
+```
+
+### 方式二：Windows 一键启动
+
+双击 `start.bat`：自动检测依赖 → 启动前后端 → 自动打开浏览器
+
+### 方式三：手动启动（全平台）
 
 ```bash
 # 1. 克隆仓库
@@ -81,7 +101,7 @@ git clone https://github.com/Yan120307/zhixue-notes.git
 cd zhixue-notes
 
 # 2. 安装依赖
-pip install requests reportlab matplotlib
+pip install -r requirements.txt
 
 # 3. 启动后端服务
 cd backend && python server.py
@@ -99,6 +119,7 @@ cd frontend && python -m http.server 8765
 2. 系统自动识别资源类型
 3. 点击「**一键整理**」
 4. 等待流水线完成，笔记卡片展开后即可下载所有文件
+5. 按需点击「**导出 Anki**」生成记忆卡片，或「**写入 Obsidian**」同步到知识库
 
 ## 🤖 配置大模型（可选）
 
@@ -128,6 +149,29 @@ export ZHIXUE_LLM_MODEL="gpt-4o-mini"
 - **通俗解释**：生活化类比 + 零基础友好
 - **必背考点**：AI 生成的考试重点清单
 
+## 🧩 学习工具集成
+
+### Anki 卡片导出
+
+- 整理时在格式选项勾选「Anki 卡片」，或在任意笔记卡片点击「**导出 Anki**」
+- 生成 TSV 文件，在 Anki 中「文件 → 导入」选择该 TSV 即可开始间隔重复记忆
+
+### Obsidian Vault 写入
+
+- 在「设置 → Obsidian 集成」填入 Vault 本地路径（如 `D:\MyVault`），或首次点击时输入
+- 点击笔记卡片「**写入 Obsidian**」，笔记与 MOC 索引页会写入 Vault 下的 `ZhixueNotes/` 目录
+
+### 可选增强（安装后自动启用）
+
+```bash
+pip install playwright && playwright install chromium
+```
+
+- **视频关键帧截图**：整理视频时自动截取重点画面并嵌入 PDF
+- **网盘文件浏览**：网盘分享链接自动列出文件清单（需提取码的除外）
+
+> 未安装 playwright 不影响其他功能，自动跳过相关步骤
+
 ## 📖 API 文档
 
 | 接口 | 方法 | 说明 |
@@ -137,6 +181,8 @@ export ZHIXUE_LLM_MODEL="gpt-4o-mini"
 | `/api/files/{id}/{filename}` | GET | 下载结果文件（md/pdf/png/json） |
 | `/api/notes` | GET | 列出所有已完成笔记 |
 | `/api/read?id=&file=notes.md` | GET | 读取笔记内容（在线预览用） |
+| `/api/export/anki` | POST | 按需生成 Anki 卡片，body: `{"id": "..."}` |
+| `/api/export/obsidian` | POST | 写入 Obsidian Vault，body: `{"id": "...", "vault": "D:\\MyVault", "folder": "ZhixueNotes"}` |
 
 <details>
 <summary>展开查看 API 调用示例</summary>
@@ -171,7 +217,14 @@ zhixue-notes/
 │   ├── fetch_subtitles.py      # 多平台字幕抓取（B站 WBI / yt-dlp）
 │   ├── export_pdf.py           # Markdown → PDF（reportlab，中文友好）
 │   ├── gen_mindmap.py          # 知识图谱 → 思维导图 PNG（matplotlib）
-│   └── screenshot_keyframes.py # 视频关键帧截图（playwright）
+│   ├── screenshot_keyframes.py # 视频关键帧截图（playwright）
+│   ├── export_anki.py          # 知识图谱 → Anki 卡片 TSV
+│   ├── export_obsidian.py      # 笔记写入 Obsidian Vault
+│   └── browse_pan.py           # 网盘分享文件清单浏览
+├── start.bat                   # Windows 一键启动
+├── Dockerfile                  # Docker 构建
+├── docker-compose.yml          # Docker 编排
+├── requirements.txt            # Python 依赖
 ├── docs/
 │   ├── images/                 # README 截图
 │   └── 上线可行性分析.md        # 上线方案分析（网站/小程序/GitHub）
@@ -190,6 +243,9 @@ zhixue-notes/
 | PDF | ReportLab（中文字体自动探测：微软雅黑→黑体→宋体→CID） |
 | 思维导图 | Matplotlib（横向树 + 贝塞尔连线 + 黄金角配色） |
 | 字幕 | requests + B站 WBI 签名 / yt-dlp |
+| Anki | 知识图谱 → TSV 制卡（零依赖） |
+| Obsidian | Vault Markdown 写入 + MOC 索引（零依赖） |
+| 部署 | start.bat 一键启动 / Docker Compose |
 
 ## 🗺️ 路线图
 
@@ -200,11 +256,11 @@ zhixue-notes/
 - [x] 大模型增强（通义千问/OpenAI 通俗解释 + 考点）
 - [x] 笔记在线预览 + 历史搜索
 - [x] 浅/深双主题
-- [ ] Docker 一键部署
-- [ ] 视频关键帧自动截图（Playwright 集成）
-- [ ] 网盘文件夹批量浏览
-- [ ] Anki 卡片导出
-- [ ] Obsidian Vault 直接写入
+- [x] Docker 一键部署
+- [x] 视频关键帧自动截图（Playwright 集成，安装即用）
+- [x] 网盘文件夹批量浏览
+- [x] Anki 卡片导出
+- [x] Obsidian Vault 直接写入
 - [ ] 浏览器插件（一键收藏当前页面）
 
 ## 🤝 贡献指南

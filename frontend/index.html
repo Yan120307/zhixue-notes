@@ -154,6 +154,13 @@
     color: var(--ink); padding: 18px 20px 8px;
   }
   .composer textarea::placeholder { color: var(--muted); opacity: 0.85; }
+  .vault-input {
+    width: 100%; max-width: 420px; padding: 9px 14px;
+    border: 1.5px solid var(--line); border-radius: 10px;
+    background: var(--bg); color: var(--ink);
+    font-family: var(--font-body); font-size: 13.5px; outline: none;
+  }
+  .vault-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
   .composer-bar {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 14px 14px 20px; flex-wrap: wrap;
@@ -396,7 +403,7 @@
     </nav>
     <div class="side-head">最近笔记</div>
     <div class="recent-list" id="recentList"></div>
-    <div class="side-foot">本地运行 · 数据仅保存在本机浏览器<br>智学笔记 v1.0</div>
+    <div class="side-foot">本地运行 · 数据仅保存在本机浏览器<br>智学笔记 v1.2</div>
   </aside>
 
   <!-- ================= 主区 ================= -->
@@ -418,6 +425,7 @@
               <span class="fmt on" data-fmt="md">Markdown</span>
               <span class="fmt on" data-fmt="pdf">PDF</span>
               <span class="fmt on" data-fmt="mindmap">思维导图</span>
+              <span class="fmt" data-fmt="anki">Anki 卡片</span>
             </div>
             <button class="btn-primary" id="btnGo">
               一键整理
@@ -499,7 +507,14 @@
             <span class="fmt" data-fmt2="md">Markdown</span>
             <span class="fmt" data-fmt2="pdf">PDF</span>
             <span class="fmt" data-fmt2="mindmap">思维导图</span>
+            <span class="fmt" data-fmt2="anki">Anki 卡片</span>
           </div>
+        </div>
+        <div class="set-block">
+          <h3>Obsidian 集成</h3>
+          <div class="desc">填写 Obsidian Vault 的本地路径，笔记可一键写入（需启动本地后端）</div>
+          <input class="vault-input" id="obsidianVault" type="text" placeholder="例如 D:\MyVault">
+          <button class="btn-ghost" id="btnSaveVault" style="margin-left:10px;">保存路径</button>
         </div>
         <div class="set-block">
           <h3>数据管理</h3>
@@ -543,7 +558,7 @@
 
   var notes = load(LS.notes, []);
   var profile = load(LS.profile, { nick: "同学" });
-  var settings = Object.assign({ theme: "light", fmts: ["md", "pdf", "mindmap"] }, load(LS.settings, {}));
+  var settings = Object.assign({ theme: "light", fmts: ["md", "pdf", "mindmap"], obsidianVault: "" }, load(LS.settings, {}));
 
   /* ---------- 工具 ---------- */
   function toast(msg) {
@@ -556,7 +571,7 @@
     var d = new Date(ts), p = function (n) { return (n < 10 ? "0" : "") + n; };
     return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
-  var FMT_NAME = { md: "Markdown", pdf: "PDF", mindmap: "思维导图" };
+  var FMT_NAME = { md: "Markdown", pdf: "PDF", mindmap: "思维导图", anki: "Anki 卡片" };
 
   /* ---------- 资源类型识别 ---------- */
   function detectType(text) {
@@ -808,7 +823,10 @@
           "<p><b>交付格式</b>　" + esc(fmts) + (meta ? " · " + esc(meta) : "") + "</p>" +
           (isDemo ? "<p>本条为<b>演示数据</b>，正式整理能力已接入，整理完成后这里将展示下载链接。</p>" :
            "<p><b>交付文件</b>　" + filesHtml + "</p>" +
-           '<p><button class="btn-ghost" style="margin:0;padding:5px 14px;font-size:12.5px;" onclick="previewNote(\'' + n.id + '\')">在线预览笔记</button></p>' +
+            "<p>" +
+            '<button class="btn-ghost" style="margin:0 8px 0 0;padding:5px 14px;font-size:12.5px;" onclick="previewNote(\'' + n.id + '\')">在线预览笔记</button>' +
+            '<button class="btn-ghost" style="margin:0 8px 0 0;padding:5px 14px;font-size:12.5px;" onclick="exportAnki(\'' + n.id + '\')">导出 Anki</button>' +
+            '<button class="btn-ghost" style="margin:0;padding:5px 14px;font-size:12.5px;" onclick="exportObsidian(\'' + n.id + '\')">写入 Obsidian</button></p>' +
            (n.llm ? "<p>已由大模型生成通俗解释与考点提炼。</p>" : "<p>配置 DASHSCOPE_API_KEY 环境变量可启用 AI 通俗解释。</p>")) +
         "</div></div>";
     }).join("");
@@ -887,7 +905,7 @@
       time: now - 3600000, demo: true
     }];
     profile = { nick: "同学" };
-    settings = { theme: "light", fmts: ["md", "pdf", "mindmap"] };
+    settings = { theme: "light", fmts: ["md", "pdf", "mindmap"], obsidianVault: "" };
     save(LS.notes, notes); save(LS.profile, profile); save(LS.settings, settings);
     renderAll();
     toast("已恢复出厂（含演示数据）");
@@ -912,9 +930,50 @@
     if (e.target === $("#previewModal")) closePreview();
   });
 
+  /* ---------- Anki / Obsidian 按需导出 ---------- */
+  window.exportAnki = function (taskId) {
+    toast("正在生成 Anki 卡片…");
+    fetch(API + "/api/export/anki", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: taskId })
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.error) { toast(data.error); return; }
+      notes.forEach(function (n) {
+        if (n.id === taskId) { n.files = n.files || {}; n.files["Anki卡片.txt"] = data.file; }
+      });
+      save(LS.notes, notes); renderNotes();
+      toast("Anki 卡片已生成，可在交付文件中下载");
+    }).catch(function () { toast("无法连接本地服务（请确认 server.py 正在运行）"); });
+  };
+  window.exportObsidian = function (taskId) {
+    var vault = (settings.obsidianVault || "").trim();
+    if (!vault) vault = (prompt("请输入 Obsidian Vault 的本地路径：\n（例如 D:\\MyVault，可在设置页保存默认路径）") || "").trim();
+    if (!vault) return;
+    settings.obsidianVault = vault; save(LS.settings, settings); paintObsidianVault();
+    toast("正在写入 Obsidian…");
+    fetch(API + "/api/export/obsidian", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: taskId, vault: vault, folder: "ZhixueNotes" })
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.error) { toast(data.error); return; }
+      toast("已写入 Obsidian Vault：" + vault);
+    }).catch(function () { toast("无法连接本地服务（请确认 server.py 正在运行）"); });
+  };
+
+  /* ---------- 设置：Obsidian Vault 路径 ---------- */
+  function paintObsidianVault() {
+    var el = $("#obsidianVault");
+    if (el) el.value = settings.obsidianVault || "";
+  }
+  $("#btnSaveVault").addEventListener("click", function () {
+    settings.obsidianVault = ($("#obsidianVault").value || "").trim();
+    save(LS.settings, settings);
+    toast(settings.obsidianVault ? "Vault 路径已保存" : "已清空 Vault 路径");
+  });
+
   /* ---------- 初始化 ---------- */
   function renderAll() {
-    applyTheme(); paintFmts(); renderNotes(); renderRecent(); renderProfile(); renderStats();
+    applyTheme(); paintFmts(); paintObsidianVault(); renderNotes(); renderRecent(); renderProfile(); renderStats();
   }
   renderAll();
 })();

@@ -1,0 +1,15 @@
+services:
+  zhixue:
+    build: .
+    container_name: zhixue-notes
+    ports:
+      - "8765:8765"   # 前端
+      - "8766:8766"   # 后端 API
+    environment:
+      # 启用 AI 增强请取消注释并填入你的 Key
+      # - DASHSCOPE_API_KEY=sk-你的Key
+      - ZHIXUE_LLM_MODEL=qwen-plus
+    restart: unless-stopped
+    volumes:
+      # 笔记产出持久化（可选）
+      - ./output:/app/output

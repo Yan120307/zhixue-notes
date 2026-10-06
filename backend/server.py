@@ -36,7 +36,17 @@ _cfg = os.environ.get("TELEAGENT_CONFIG_DIR", os.path.expanduser("~/.config/Tele
 if "users" not in _cfg:
     _cfg = os.path.join(_cfg, "users", "v1_public_2102373803160674304")
 SKILL_DIR = os.path.join(_cfg, "skills", "video-note-master")
-SCRIPTS = os.path.join(SKILL_DIR, "scripts")
+
+# 脚本目录：优先使用仓库自带 scripts/（保证 GitHub 克隆 / Docker 部署开箱即用），
+# 仅在仓库脚本缺失时回退到技能目录
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SCRIPT_CANDIDATES = [
+    os.path.join(REPO_DIR, "scripts"),
+    os.path.join(SKILL_DIR, "scripts"),
+]
+SCRIPTS = next(
+    (d for d in _SCRIPT_CANDIDATES if os.path.exists(os.path.join(d, "export_pdf.py"))),
+    _SCRIPT_CANDIDATES[0])
 
 # 工作目录
 WORK_DIR = os.path.join(os.path.expanduser("~"), ".local", "share", "TeleAgent",
@@ -265,6 +275,33 @@ def _run_script(cmd, timeout=90):
         return False
 
 
+_playwright_cache = {}
+
+
+def playwright_available():
+    """检测 playwright 是否可用（缓存结果）"""
+    if "ok" not in _playwright_cache:
+        try:
+            import importlib.util
+            _playwright_cache["ok"] = importlib.util.find_spec("playwright") is not None
+        except Exception:
+            _playwright_cache["ok"] = False
+    return _playwright_cache["ok"]
+
+
+def export_anki(kmap_path, out_path):
+    """knowledge_map → Anki 卡片 TSV"""
+    script = os.path.join(SCRIPTS, "export_anki.py")
+    return _run_script([sys.executable, script, kmap_path, "-o", out_path], timeout=30)
+
+
+def export_obsidian(task_dir, vault, folder):
+    """把任务目录笔记写入 Obsidian vault"""
+    script = os.path.join(SCRIPTS, "export_obsidian.py")
+    ok = _run_script([sys.executable, script, task_dir, "--vault", vault, "--folder", folder], timeout=30)
+    return ok
+
+
 def export_pdf(md_path, out_pdf, img_base=None):
     script = os.path.join(SCRIPTS, "export_pdf.py")
     cmd = [sys.executable, script, md_path, "-o", out_pdf]
@@ -354,6 +391,61 @@ def process_task(task_id, url, fmts, type_info):
         if ok and os.path.exists(mm_path):
             files["思维导图.png"] = "mindmap.png"
 
+    # 视频关键帧截图（安装 playwright 后自动启用）
+    if type_info["key"] in ("bilibili", "youtube") and kmap.get("chapters"):
+        if playwright_available():
+            update(7, "正在截取重点画面…（playwright）")
+            pts = []
+            for ch in kmap.get("chapters", []):
+                for p in ch.get("points", []):
+                    if p.get("start_sec"):
+                        pts.append(str(int(p["start_sec"])))
+            if pts:
+                shot_dir = os.path.join(task_dir, "screenshots")
+                os.makedirs(shot_dir, exist_ok=True)
+                script = os.path.join(SCRIPTS, "screenshot_keyframes.py")
+                ok = _run_script([sys.executable, script, url,
+                                  "--points", ",".join(pts[:10]),
+                                  "--out-dir", shot_dir, "--wait", "2"], timeout=180)
+                _log("screenshot ok=%s" % ok)
+                if ok:
+                    n = len([f for f in os.listdir(shot_dir) if f.endswith(".png")])
+                    if n:
+                        files["重点截图"] = "screenshots/"
+        else:
+            _log("playwright 未安装，跳过截图")
+
+    # 网盘链接：尝试列出文件清单（安装 playwright 后自动启用）
+    if type_info["key"] == "pan":
+        if playwright_available():
+            update(7, "正在浏览网盘文件清单…（playwright）")
+            script = os.path.join(SCRIPTS, "browse_pan.py")
+            list_path = os.path.join(task_dir, "pan_files.json")
+            ok = _run_script([sys.executable, script, url, "--out", list_path], timeout=60)
+            _log("browse_pan attempted ok=%s" % ok)
+            if ok and os.path.exists(list_path):
+                try:
+                    with open(list_path, "r", encoding="utf-8") as f:
+                        pan_info = json.load(f)
+                    if pan_info.get("need_password"):
+                        update(7, "该网盘分享需要提取码，无法自动浏览")
+                    elif pan_info.get("error"):
+                        _log("browse_pan error=%s" % str(pan_info["error"])[:150])
+                    elif pan_info.get("files"):
+                        files["网盘文件清单.json"] = "pan_files.json"
+                        update(7, "网盘浏览完成，识别到 %d 个文件" % len(pan_info["files"]))
+                except Exception as e:
+                    _log("browse_pan read fail: %s" % e)
+        else:
+            _log("playwright 未安装，跳过网盘浏览")
+
+    # Anki 卡片（勾选了即生成）
+    if "anki" in fmts:
+        anki_path = os.path.join(task_dir, "anki_cards.txt")
+        update(7, "正在生成 Anki 卡片…")
+        if export_anki(kmap_path, anki_path):
+            files["Anki卡片.txt"] = "anki_cards.txt"
+
     update(7, "整理完成！" + ("（含 AI 通俗解释）" if llm_on else ""), done=True, result={
         "title": kmap.get("course_title", "学习笔记"),
         "files": files,
@@ -381,15 +473,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path == "/api/process":
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
-            try:
-                data = json.loads(body)
-            except Exception:
-                self._json(400, {"error": "无效 JSON"})
+            body = self._read_body()
+            if body is None:
                 return
-            url = (data.get("url") or "").strip()
-            fmts = data.get("fmts") or ["md", "pdf", "mindmap"]
+            url = (body.get("url") or "").strip()
+            fmts = body.get("fmts") or ["md", "pdf", "mindmap"]
             if not url:
                 self._json(400, {"error": "请提供资源链接或内容"})
                 return
@@ -409,7 +497,66 @@ class Handler(http.server.BaseHTTPRequestHandler):
             t.start()
             self._json(200, {"task_id": task_id, "type": type_info})
             return
+        if path == "/api/export/anki":
+            # 按需生成 Anki 卡片：POST {"id": <任务ID>}
+            body = self._read_body()
+            if body is None:
+                return
+            tid = (body.get("id") or "").strip()
+            if ".." in tid or not tid:
+                self._json(400, {"error": "无效任务 ID"})
+                return
+            task_dir = os.path.join(TASKS_DIR, tid)
+            kmap_path = os.path.join(task_dir, "knowledge_map.json")
+            if not os.path.exists(kmap_path):
+                self._json(404, {"error": "笔记不存在（仅支持已完成的正式整理任务）"})
+                return
+            anki_path = os.path.join(task_dir, "anki_cards.txt")
+            if export_anki(kmap_path, anki_path) and os.path.exists(anki_path):
+                with _lock:
+                    t = _tasks.get(tid)
+                    if t and t.get("result") and t["result"].get("files") is not None:
+                        t["result"]["files"]["Anki卡片.txt"] = "anki_cards.txt"
+                self._json(200, {"ok": True, "file": "anki_cards.txt", "name": "Anki卡片.txt"})
+            else:
+                self._json(500, {"error": "Anki 卡片生成失败，请查看后端日志"})
+            return
+        if path == "/api/export/obsidian":
+            # 写入 Obsidian Vault：POST {"id": <任务ID>, "vault": <路径>, "folder": <目录>}
+            body = self._read_body()
+            if body is None:
+                return
+            tid = (body.get("id") or "").strip()
+            vault = (body.get("vault") or "").strip()
+            folder = (body.get("folder") or "ZhixueNotes").strip()
+            if ".." in tid or not tid:
+                self._json(400, {"error": "无效任务 ID"})
+                return
+            if not vault:
+                self._json(400, {"error": "请提供 Obsidian Vault 路径"})
+                return
+            task_dir = os.path.join(TASKS_DIR, tid)
+            if not os.path.exists(os.path.join(task_dir, "notes.md")):
+                self._json(404, {"error": "笔记不存在（仅支持已完成的正式整理任务）"})
+                return
+            ok = export_obsidian(task_dir, vault, folder)
+            _log("export_obsidian ok=%s vault=%s" % (ok, vault))
+            if ok:
+                self._json(200, {"ok": True, "vault": vault, "folder": folder})
+            else:
+                self._json(500, {"error": "写入 Obsidian 失败，请检查 Vault 路径是否正确"})
+            return
         self._json(404, {"error": "未知接口"})
+
+    def _read_body(self):
+        """读取并解析 POST body JSON；解析失败时返回 400 并返回 None"""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length).decode("utf-8") or "{}"
+            return json.loads(raw)
+        except Exception:
+            self._json(400, {"error": "无效 JSON"})
+            return None
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -499,6 +646,9 @@ def main():
     print("  GET  /api/files/{id}/{filename}  下载结果文件")
     print("  GET  /api/notes      列出已完成笔记")
     print("  GET  /api/read?id=&file=  读取文件内容")
+    print("  POST /api/export/anki       按需生成 Anki 卡片")
+    print("  POST /api/export/obsidian   按需写入 Obsidian Vault")
+    print("脚本目录: %s" % SCRIPTS)
     print("任务目录: %s" % TASKS_DIR)
     try:
         server.serve_forever()
