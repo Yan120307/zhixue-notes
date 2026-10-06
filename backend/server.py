@@ -90,9 +90,11 @@ def fetch_subtitles(url, out_dir, type_key):
     script = os.path.join(SCRIPTS, "fetch_subtitles.py")
     if not os.path.exists(script):
         return False, None, "字幕抓取脚本不存在"
+    meta_path = os.path.join(out_dir, "video_meta.json")
     try:
         proc = subprocess.Popen(
-            [sys.executable, script, url, "--out-dir", out_dir, "--fmt", "srt"],
+            [sys.executable, script, url, "--out-dir", out_dir, "--fmt", "srt",
+             "--meta-out", meta_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=0x00000008 if os.name == "nt" else 0)
         start = time.time()
@@ -110,6 +112,37 @@ def fetch_subtitles(url, out_dir, type_key):
         return False, None, "字幕抓取超时（120秒）"
     except Exception as e:
         return False, None, str(e)
+
+
+def _read_meta(task_dir):
+    """读取 fetch_subtitles 落盘的视频元信息（真实标题等）"""
+    try:
+        p = os.path.join(task_dir, "video_meta.json")
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+
+def fetch_webpage(url, task_dir):
+    """抓取网页正文，返回 (ok, title, paragraphs, error)"""
+    script = os.path.join(SCRIPTS, "fetch_webpage.py")
+    if not os.path.exists(script):
+        return False, None, [], "网页抓取脚本不存在"
+    out_path = os.path.join(task_dir, "web_content.json")
+    ok = _run_script([sys.executable, script, url, "--out", out_path], timeout=90)
+    if not os.path.exists(out_path):
+        return False, None, [], "网页抓取失败（脚本未能运行）"
+    try:
+        with open(out_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False, None, [], "网页抓取结果解析失败"
+    if data.get("error"):
+        return False, data.get("title"), [], data["error"]
+    return True, data.get("title"), data.get("paragraphs") or [], None
 
 
 def parse_srt(srt_path):
@@ -142,45 +175,107 @@ def tcs(seconds):
     return "%02d:%02d:%02d" % (h, m, s)
 
 
-def basic_extract(items, title="学习资源", max_points=10):
+def split_sentences(full_text):
+    """按句末标点分句，返回有效句列表（小数点后跟数字时不切分，如 3.0）"""
+    parts = re.split(r"(?<=[。！？；!?])\s*|(?<=[.])(?!\d)\s*", full_text)
+    return [s.strip() for s in parts if len(s.strip()) >= 6]
+
+
+def info_score(s):
+    """信息量评分：数值/英文术语/长度加权"""
+    return len(re.findall(r"\d|[A-Z]{2,}", s)) + min(len(s), 40) / 40.0
+
+
+def _find_excerpt(sent, texts):
+    """在原始条目里找包含要点句的原文，返回该条目及相邻上下文"""
+    key = sent[:10]
+    for i, t in enumerate(texts):
+        if key and key in t:
+            out = [texts[max(0, i - 1)], t]
+            if i + 1 < len(texts):
+                out.append(texts[i + 1])
+            return out
+    return texts[:2]
+
+
+def basic_extract(items, title="学习资源", max_chapters=10):
+    """
+    从内容条目中提炼知识图谱。
+    items: [(sec, text), ...] —— 有真实时间轴（视频字幕）时按 300 秒分章；
+    无时间轴（网页段落/纯文本）时按条目数分章。
+    """
     if not items:
-        return {"course_title": title, "chapters": []}
-    duration = items[-1][0] if items else 0
-    seg_len = 300
-    segments = []
-    cur = []
-    cur_start = items[0][0]
-    for sec, text in items:
-        if sec - cur_start > seg_len and cur:
-            segments.append((cur_start, cur))
-            cur = []
-            cur_start = sec
-        cur.append((sec, text))
-    if cur:
-        segments.append((cur_start, cur))
+        return {"course_title": title, "chapters": [], "has_timeline": False}
+
+    secs = [s for s, _ in items]
+    has_timeline = (max(secs) - min(secs)) >= 120
+    kmap = {"course_title": title, "chapters": [], "has_timeline": has_timeline}
+
+    if has_timeline:
+        kmap["duration_sec"] = int(max(secs))
+        seg_len = 300
+        groups = []
+        cur = []
+        cur_start = items[0][0]
+        for sec, text in items:
+            if sec - cur_start > seg_len and cur:
+                groups.append((cur_start, cur))
+                cur = []
+                cur_start = sec
+            cur.append((sec, text))
+        if cur:
+            groups.append((cur_start, cur))
+    else:
+        n = len(items)
+        group_size = max(1, (n + max_chapters - 1) // max_chapters)
+        groups = [(0, items[i:i + group_size]) for i in range(0, n, group_size)]
+        kmap["duration_sec"] = 0
 
     chapters = []
-    for i, (start, seg_items) in enumerate(segments[:max_points]):
-        texts = [t for _, t in seg_items]
+    for gi, (start, group) in enumerate(groups):
+        texts = [t for _, t in group]
         full = " ".join(texts)
-        sentences = re.split(r"[。！？.!?,，,]", full)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 8]
+        sentences = split_sentences(full)
+        if not sentences:
+            # 没有可分句子时，用整段做单要点
+            sentences = [full[:60]] if full.strip() else []
+        ranked = sorted(sentences, key=info_score, reverse=True)
 
-        def info_score(s):
-            return len(re.findall(r"\d|[A-Z]{2,}", s)) + min(len(s), 40) / 40
-        sentences.sort(key=info_score, reverse=True)
-        title_text = sentences[0][:40] if sentences else "知识点 %d" % (i + 1)
-        summary = " ".join(sentences[:3])[:120] if sentences else full[:120]
-        chapters.append({
-            "title": "第%d节 %s" % (i + 1, tcs(start)),
-            "points": [{
-                "title": title_text,
-                "start_sec": int(start),
-                "start_label": tcs(start),
-                "summary": summary
-            }]
-        })
-    return {"course_title": title, "duration_sec": int(duration), "chapters": chapters}
+        # 章节名 = 该章信息量最高句前 18 字
+        chap_name = ranked[0][:18].strip() if ranked else "内容 %d" % (gi + 1)
+        if has_timeline:
+            chap_title = "第%d节 [%s] %s" % (gi + 1, tcs(start), chap_name)
+        else:
+            chap_title = "第%d节 %s" % (gi + 1, chap_name)
+
+        n_points = max(1, min(3, len(sentences) // 4 + 1))
+        points = []
+        used = set()
+        for sent in ranked[:n_points * 2]:
+            if len(points) >= n_points:
+                break
+            if sent[:20] in used:
+                continue
+            used.add(sent[:20])
+            # 摘要 = 要点句 + 章内另外 2 句补充
+            summary_parts = [sent]
+            for cand in sentences:
+                if len(summary_parts) >= 3:
+                    break
+                if cand[:20] not in used and cand != sent:
+                    summary_parts.append(cand)
+                    used.add(cand[:20])
+            points.append({
+                "title": sent[:36],
+                "start_sec": int(start) if has_timeline else None,
+                "start_label": tcs(start) if has_timeline else None,
+                "summary": " ".join(summary_parts)[:220],
+                "excerpt": _find_excerpt(sent, texts),
+            })
+        chapters.append({"title": chap_title, "points": points})
+
+    kmap["chapters"] = chapters[:max_chapters]
+    return kmap
 
 
 def build_notes_md(kmap, srt_items, source_url, fmts):
@@ -198,7 +293,19 @@ def build_notes_md(kmap, srt_items, source_url, fmts):
     if kmap.get("llm_summary") and kmap["llm_summary"].get("overview"):
         lines.append(kmap["llm_summary"]["overview"])
     else:
-        lines.append("本笔记由智学笔记平台自动整理，涵盖以下核心内容。")
+        chapters = kmap.get("chapters", [])
+        # 概述取每章首要点标题（比拼接句子更结构化）
+        pts = []
+        for ch in chapters:
+            ch_points = ch.get("points", [])
+            if ch_points:
+                pts.append(ch_points[0]["title"])
+        pts = pts[:8]
+        if pts:
+            lines.append("本资源共 %d 章，核心要点包括：%s。" % (
+                len(chapters), "；".join(pts)))
+        else:
+            lines.append("本笔记由智学笔记平台自动整理。")
     lines.append("")
     lines.append("### 核心知识图谱")
     lines.append("")
@@ -223,13 +330,11 @@ def build_notes_md(kmap, srt_items, source_url, fmts):
             if p.get("one_liner"):
                 lines.append("**一句话掌握**：%s" % p["one_liner"])
                 lines.append("")
-            if srt_items and p.get("start_sec"):
-                nearby = [t for s, t in srt_items if abs(s - p["start_sec"]) < 60]
-                if nearby:
-                    lines.append("**原文摘录**：")
-                    for t in nearby[:3]:
-                        lines.append("> %s" % t)
-                    lines.append("")
+            if p.get("excerpt"):
+                lines.append("**原文摘录**：")
+                for t in p["excerpt"][:3]:
+                    lines.append("> %s" % str(t)[:200])
+                lines.append("")
             if p.get("plain_explain"):
                 lines.append("**通俗解释**：")
                 lines.append("")
@@ -326,28 +431,69 @@ def process_task(task_id, url, fmts, type_info):
                 "result": result, "error": error, "ts": time.time()
             })
 
-    title_prefix = type_info["name"]
+    title = None
+    fail = None
+    srt_items = []
+    video_duration = 0
+
     update(0, "正在识别资源类型…")
     update(1, "已识别：%s" % type_info["name"])
 
-    srt_path = None
-    srt_items = []
-    if type_info["key"] in ("bilibili", "youtube"):
-        update(2, "正在抓取字幕…（调用 fetch_subtitles.py）")
-        ok, srt_path, msg = fetch_subtitles(url, task_dir, type_info["key"])
+    type_key = type_info["key"]
+
+    if type_key in ("bilibili", "youtube"):
+        update(2, "正在抓取字幕…")
+        ok, srt_path, msg = fetch_subtitles(url, task_dir, type_key)
+        meta = _read_meta(task_dir) or {}
+        title = meta.get("title")
+        video_duration = meta.get("duration") or 0
         if ok:
             srt_items = parse_srt(srt_path)
             update(3, "字幕抓取成功，共 %d 条，正在提炼重点…" % len(srt_items))
+            if len(srt_items) < 8:
+                fail = "该视频字幕内容过少（%d 条），无法整理出有效笔记" % len(srt_items)
         else:
-            update(3, "字幕抓取失败：%s，将基于文本处理" % msg[:100])
-            srt_path = None
-    elif type_info["key"] == "text":
-        srt_items = [(0, url)]
-        update(3, "文本内容已接收，正在提炼重点…")
-    else:
-        update(3, "该资源类型暂不支持自动抓取，请使用 TeleAgent 助手处理")
+            if type_key == "bilibili":
+                reason = ("该视频没有 CC 字幕（B站字幕需 UP 主上传），暂无法自动整理。"
+                          "建议：换一个带 CC 字幕的视频，或复制视频文稿粘贴到输入框")
+            else:
+                reason = ("YouTube 字幕抓取失败（%s）。请确认已安装 yt-dlp，"
+                          "或复制文稿粘贴到输入框" % msg[:60])
+            if title:
+                reason = "《%s》%s" % (str(title)[:40], reason)
+            fail = reason
+    elif type_key == "web":
+        update(2, "正在抓取网页正文…")
+        ok, wtitle, paras, werr = fetch_webpage(url, task_dir)
+        if wtitle:
+            title = wtitle
+        if ok and len(paras) >= 3:
+            srt_items = [(0, p) for p in paras]
+            update(3, "正文抓取成功，共 %d 段，正在提炼重点…" % len(paras))
+        else:
+            fail = werr or "网页正文抓取失败，请直接复制网页文字粘贴到输入框"
+    elif type_key == "text":
+        sents = split_sentences(url)
+        sents = [s for s in sents if len(s.strip()) >= 6]
+        if len(sents) < 3:
+            fail = "输入内容太短（有效句不足 3 句），请粘贴更完整的学习内容"
+        else:
+            srt_items = [(0, s) for s in sents]
+            title = re.sub(r"\s+", " ", url.strip())[:24]
+            update(3, "已接收 %d 句内容，正在提炼重点…" % len(sents))
+    elif type_key == "pan":
+        fail = ("网盘分享链接暂不支持自动整理。"
+                "请打开分享链接复制资料文字，或直接粘贴视频链接到输入框")
+    else:  # pdf / doc
+        fail = "PDF / Word 文档暂不支持自动抓取，请复制文档文字后粘贴到输入框"
 
-    kmap = basic_extract(srt_items, title="%s整理笔记" % title_prefix)
+    if fail:
+        update(3, "整理失败：%s" % fail[:150], done=True, error=fail)
+        return
+
+    kmap = basic_extract(srt_items, title=(title or "%s整理笔记" % type_info["name"]))
+    if type_key in ("bilibili", "youtube") and video_duration:
+        kmap["duration_sec"] = int(video_duration)
 
     # LLM 增强（配置了 API Key 时自动启用）
     llm_on = llm_available()
@@ -414,30 +560,6 @@ def process_task(task_id, url, fmts, type_info):
                         files["重点截图"] = "screenshots/"
         else:
             _log("playwright 未安装，跳过截图")
-
-    # 网盘链接：尝试列出文件清单（安装 playwright 后自动启用）
-    if type_info["key"] == "pan":
-        if playwright_available():
-            update(7, "正在浏览网盘文件清单…（playwright）")
-            script = os.path.join(SCRIPTS, "browse_pan.py")
-            list_path = os.path.join(task_dir, "pan_files.json")
-            ok = _run_script([sys.executable, script, url, "--out", list_path], timeout=60)
-            _log("browse_pan attempted ok=%s" % ok)
-            if ok and os.path.exists(list_path):
-                try:
-                    with open(list_path, "r", encoding="utf-8") as f:
-                        pan_info = json.load(f)
-                    if pan_info.get("need_password"):
-                        update(7, "该网盘分享需要提取码，无法自动浏览")
-                    elif pan_info.get("error"):
-                        _log("browse_pan error=%s" % str(pan_info["error"])[:150])
-                    elif pan_info.get("files"):
-                        files["网盘文件清单.json"] = "pan_files.json"
-                        update(7, "网盘浏览完成，识别到 %d 个文件" % len(pan_info["files"]))
-                except Exception as e:
-                    _log("browse_pan read fail: %s" % e)
-        else:
-            _log("playwright 未安装，跳过网盘浏览")
 
     # Anki 卡片（勾选了即生成）
     if "anki" in fmts:

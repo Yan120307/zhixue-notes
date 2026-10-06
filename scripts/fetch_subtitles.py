@@ -146,6 +146,18 @@ def subtitle_score(s: dict) -> int:
     return 10
 
 
+def write_meta(args, meta: dict):
+    """把视频元信息写入 --meta-out 指定的 JSON 文件"""
+    if not getattr(args, "meta_out", None):
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(args.meta_out)), exist_ok=True)
+        with open(args.meta_out, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"警告: 写入元信息失败: {e}")
+
+
 def fetch_bilibili(args) -> int:
     try:
         bvid = parse_bvid(args.input)
@@ -166,6 +178,16 @@ def fetch_bilibili(args) -> int:
     cid = page["cid"]
     part = page.get("part") or title
     print(f"[2/4] 视频: {title} | 分P: {part} | cid={cid}")
+
+    # 无论后续字幕是否抓取成功，先落盘视频元信息（供后端使用真实标题）
+    write_meta(args, {
+        "platform": "bilibili",
+        "bvid": bvid,
+        "cid": cid,
+        "title": info.get("title", ""),
+        "part": part,
+        "duration": info.get("duration", 0),
+    })
 
     print("[3/4] 计算 WBI 签名并获取字幕列表 ...")
     mixin_key = get_wbi_keys()
@@ -230,6 +252,7 @@ def main():
     ap.add_argument("--out-dir", default=".", help="输出目录")
     ap.add_argument("--fmt", choices=["txt", "srt", "json"], default="txt")
     ap.add_argument("--cid", type=int, default=None, help="指定分P的cid")
+    ap.add_argument("--meta-out", default=None, help="视频元信息写入指定 JSON 文件（供后端读取真实标题）")
     args = ap.parse_args()
 
     url_lower = args.input.lower()
