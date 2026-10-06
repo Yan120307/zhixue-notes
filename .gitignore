@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+.temp/
+*.tmp
+*.log
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 任务产物（运行时生成，不入库）
+.temp/zhixue-tasks/
+*.srt
+*.m4s
