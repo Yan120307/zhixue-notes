@@ -15,6 +15,11 @@ rem      下面的探测会自动排除它
 rem ============================================================
 set "PY="
 
+rem 1.0 用户自定义 Python（可选：设置环境变量 ZHIXUE_PYTHON 指向 python.exe）
+if defined ZHIXUE_PYTHON (
+    if exist "%ZHIXUE_PYTHON%" set "PY=%ZHIXUE_PYTHON%"
+)
+
 rem 1.1 py 启动器（Windows 自带，指向已安装的 Python）
 where py >nul 2>&1
 if not errorlevel 1 (
@@ -37,14 +42,9 @@ if not defined PY (
 
 rem 1.3 常见安装路径
 if not defined PY (
-    for %%d in ("%LocalAppData%\Programs\Python\Python*\python.exe" "%ProgramFiles%\Python\Python*\python.exe" "C:\Python*\python.exe" "C:\develop\python\python.exe") do (
+    for %%d in ("%LocalAppData%\Programs\Python\Python*\python.exe" "%ProgramFiles%\Python\Python*\python.exe" "C:\Python*\python.exe") do (
         if exist %%d set "PY=%%~d"
     )
-)
-
-rem 1.4 本机内置 Python（TeleAgent 运行时兜底，无需安装）
-if not defined PY (
-    if exist "C:\Users\windows\.local\share\TeleAgent\runtimes\python\python.exe" set "PY=C:\Users\windows\.local\share\TeleAgent\runtimes\python\python.exe"
 )
 
 rem 最终验证：必须真的能执行（再次排除占位别名）

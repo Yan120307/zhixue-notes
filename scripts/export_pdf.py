@@ -375,7 +375,7 @@ def main():
         out, pagesize=A4,
         leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2.2 * cm, bottomMargin=2 * cm,
         title= sanitize(args.title or first_h1(md_text) or '网课重点笔记'),
-        author='TeleAgent · 网课重点笔记大师')
+        author='智学笔记 Zhixue Notes')
     usable_w = A4[0] - 4 * cm
     story = md_to_story(md_text, base_dir, styles, usable_w)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)

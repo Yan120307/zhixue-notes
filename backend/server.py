@@ -29,36 +29,20 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm import llm_available, llm_enhance_note, llm_generate_summary
 
-# 技能脚本目录
-_cfg = os.environ.get("TELEAGENT_CONFIG_DIR", os.path.expanduser("~/.config/TeleAgent"))
-# TELEAGENT_CONFIG_DIR 已含完整用户路径（如 .../TeleAgent/users/v1_xxx）
-# 若末尾不含 users/，则补上默认用户段；若已含则直接用
-if "users" not in _cfg:
-    _cfg = os.path.join(_cfg, "users", "v1_public_2102373803160674304")
-SKILL_DIR = os.path.join(_cfg, "skills", "video-note-master")
-
-# 脚本目录：优先使用仓库自带 scripts/（保证 GitHub 克隆 / Docker 部署开箱即用），
-# 仅在仓库脚本缺失时回退到技能目录
+# 脚本目录：仓库自带 scripts/（GitHub 克隆 / Docker 部署开箱即用，零外部依赖）
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SCRIPT_CANDIDATES = [
-    os.path.join(REPO_DIR, "scripts"),
-    os.path.join(SKILL_DIR, "scripts"),
-]
-SCRIPTS = next(
-    (d for d in _SCRIPT_CANDIDATES if os.path.exists(os.path.join(d, "export_pdf.py"))),
-    _SCRIPT_CANDIDATES[0])
+SCRIPTS = os.path.join(REPO_DIR, "scripts")
 
-# 工作目录
-WORK_DIR = os.path.join(os.path.expanduser("~"), ".local", "share", "TeleAgent",
-                        "TeleAgent的工作空间")
-TASKS_DIR = os.path.join(WORK_DIR, ".temp", "zhixue-tasks")
+# 数据目录：用户主目录下（跨平台，不污染仓库）
+DATA_DIR = os.path.join(os.path.expanduser("~"), ".zhixue-notes")
+TASKS_DIR = os.path.join(DATA_DIR, "tasks")
 os.makedirs(TASKS_DIR, exist_ok=True)
 
 # 任务状态
 _tasks = {}
 _lock = threading.Lock()
 
-LOG_FILE = os.path.join(TASKS_DIR, "..", "zhixue-backend.log")
+LOG_FILE = os.path.join(DATA_DIR, "zhixue-backend.log")
 
 def _log(msg):
     with open(LOG_FILE, "a", encoding="utf-8") as f:

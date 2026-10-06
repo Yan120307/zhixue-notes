@@ -76,10 +76,27 @@ def write_progress(task_dir, stage, percent, message=""):
         pass
 
 
+def _retry_get(urls, headers, timeout=90, tries=3, desc="请求", **kwargs):
+    """带重试的多 URL 请求：主 URL 失败自动换备选 CDN，指数退避"""
+    if isinstance(urls, str):
+        urls = [urls]
+    last_err = None
+    for url in urls:
+        for i in range(tries):
+            try:
+                return SESSION.get(url, headers=headers, timeout=timeout, **kwargs)
+            except Exception as e:
+                last_err = e
+                if i < tries - 1:
+                    time.sleep(2 * (i + 1))
+    raise RuntimeError("%s网络连接失败（已重试 %d 次 × %d 个地址）: %s" % (
+        desc, tries, len(urls), str(last_err)[:90]))
+
+
 def _probe_total(url, headers):
     """用 Range 探测文件真实总大小（B站对匿名完整 GET 限长，但 Range 可取任意区间）"""
     try:
-        r = SESSION.get(url, headers=dict(headers, Range="bytes=0-0"), timeout=20)
+        r = _retry_get(url, dict(headers, Range="bytes=0-0"), timeout=30, tries=2, desc="探测文件大小")
         cr = r.headers.get("Content-Range", "")
         m = re.search(r"/(\d+)$", cr)
         if m:
@@ -101,7 +118,7 @@ def download_audio(bvid, task_dir, progress):
     mixin = get_wbi_keys()
     params = enc_wbi({"bvid": bvid, "cid": cid, "qn": 64, "fnval": 16,
                       "fnver": 0, "fourk": 0, "platform": "pc"}, mixin)
-    r = SESSION.get("https://api.bilibili.com/x/player/playurl", params=params, timeout=15)
+    r = _retry_get("https://api.bilibili.com/x/player/playurl", {}, params=params, timeout=20, tries=3, desc="获取音频流")
     data = r.json()
     if data.get("code") != 0:
         raise RuntimeError("获取音频流失败: %s" % data.get("message"))
@@ -109,36 +126,44 @@ def download_audio(bvid, task_dir, progress):
     if not audios:
         raise RuntimeError("该视频没有可用的音频流")
 
-    # 选最低码率（转写足够，下载最快）
+    # 选最低码率（转写足够，下载最快）；收集主/备 CDN 地址用于重试切换
     stream = min(audios, key=lambda a: int(a.get("bandwidth") or 10**9))
-    url = stream["baseUrl"]
+    urls = [stream["baseUrl"]]
+    for key in ("backupUrl", "backupUrls"):
+        extra = stream.get(key) or []
+        if isinstance(extra, str):
+            extra = [extra]
+        urls.extend(u for u in extra if u and u not in urls)
     headers = {"Referer": "https://www.bilibili.com/", "User-Agent": SESSION.headers.get("User-Agent", "")}
 
-    total = _probe_total(url, headers)
+    total = _probe_total(urls, headers)
     if not total:
         raise RuntimeError("无法探测音频文件大小（接口异常），请稍后重试")
 
+    # 断点续传：.part 文件保留已下载块，重跑时从断点继续
     tmp = audio_path + ".part"
+    pos = os.path.getsize(tmp) if os.path.exists(tmp) else 0
     CHUNK = 4 * 1024 * 1024
     t0 = time.time()
-    pos = 0
-    with open(tmp, "wb") as f:
-        while pos < total:
-            end = min(pos + CHUNK, total) - 1
-            try:
-                rr = SESSION.get(url, headers=dict(headers, Range="bytes=%d-%d" % (pos, end)), timeout=60)
-            except Exception as e:
-                raise RuntimeError("音频分块下载中断（%s），请重新整理续传" % str(e)[:60])
-            if rr.status_code not in (200, 206):
-                raise RuntimeError("音频分块下载失败 HTTP %d" % rr.status_code)
-            data = rr.content
-            if not data:
-                raise RuntimeError("音频分块下载返回空数据")
-            f.write(data)
-            pos += len(data)
-            write_progress(task_dir, "download", pos * 100.0 / total,
-                           "下载音频中 %.0f%%（%.1f MB / %.1f MB）" % (
-                               pos * 100.0 / total, pos / 1048576, total / 1048576))
+    if pos < total:
+        with open(tmp, "ab") as f:
+            while pos < total:
+                end = min(pos + CHUNK, total) - 1
+                try:
+                    rr = _retry_get(urls, dict(headers, Range="bytes=%d-%d" % (pos, end)),
+                                    timeout=90, tries=3, desc="下载音频分块")
+                except Exception as e:
+                    raise RuntimeError("%s 已保留断点，重新整理将从断点续传" % str(e)[:120])
+                if rr.status_code not in (200, 206):
+                    raise RuntimeError("音频分块下载失败 HTTP %d" % rr.status_code)
+                data = rr.content
+                if not data:
+                    raise RuntimeError("音频分块下载返回空数据")
+                f.write(data)
+                pos += len(data)
+                write_progress(task_dir, "download", pos * 100.0 / total,
+                               "下载音频中 %.0f%%（%.1f MB / %.1f MB）" % (
+                                   pos * 100.0 / total, pos / 1048576, total / 1048576))
     if pos < total * 0.98:
         raise RuntimeError("音频下载不完整（%d/%d 字节），请重新整理" % (pos, total))
     os.replace(tmp, audio_path)

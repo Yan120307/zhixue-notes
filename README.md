@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '64d8bf54-337b-4792-8b6d-54c42cbb1f59'
-  PropagateID: '64d8bf54-337b-4792-8b6d-54c42cbb1f59'
-  ReservedCode1: 'd1d90089-1136-4578-99f8-cd71a199fead'
-  ReservedCode2: 'd1d90089-1136-4578-99f8-cd71a199fead'
+  ProduceID: '324d6041-b506-4cf3-ba27-cc00fd113e9f'
+  PropagateID: '324d6041-b506-4cf3-ba27-cc00fd113e9f'
+  ReservedCode1: '594aa8e6-5775-4b96-998b-9a9abc4a00a0'
+  ReservedCode2: '594aa8e6-5775-4b96-998b-9a9abc4a00a0'
 ---
 
 # 智学笔记 (ZhiXue Notes)
@@ -95,6 +95,9 @@ docker compose up -d
 ### 方式二：Windows 一键启动
 
 双击 `start.bat`：自动检测依赖 → 启动前后端 → 自动打开浏览器
+
+> 自动探测 Python（py 启动器 → python/python3 命令 → 常见安装路径）；
+> 也可用环境变量 `ZHIXUE_PYTHON` 指定 python.exe 完整路径（适合便携版/嵌入式 Python）
 
 ### 方式三：手动启动（全平台）
 
