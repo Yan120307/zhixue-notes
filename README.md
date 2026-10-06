@@ -1,4 +1,4 @@
----
+﻿---
 AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
@@ -238,4 +238,3 @@ zhixue-notes/
 
 </div>
 
-> AI生成
