@@ -214,7 +214,31 @@
     border-radius: var(--radius); padding: 20px 24px; box-shadow: var(--shadow);
   }
   .pipeline.show { display: block; animation: fadeIn 0.3s ease; }
-  .pipe-steps { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+  .pipe-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+  .pipe-title { font-weight: 700; font-size: 15px; color: var(--ink); }
+  .pipe-title.ok { color: #16a34a; }
+  .pipe-title.err { color: #dc2626; }
+  .pipe-meta { display: flex; align-items: baseline; gap: 12px; }
+  .pipe-pct { font-weight: 700; font-size: 18px; color: var(--brand); font-variant-numeric: tabular-nums; }
+  .pipe-pct.ok { color: #16a34a; }
+  .pipe-pct.err { color: #dc2626; }
+  .pipe-timer { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pipe-progress { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
+  .pipe-fill {
+    height: 100%; width: 0%; border-radius: 999px; position: relative; overflow: hidden;
+    background: linear-gradient(90deg, var(--brand), var(--accent));
+    transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
+  }
+  .pipe-fill::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+    transform: translateX(-100%); animation: shimmer 1.6s infinite;
+  }
+  .pipeline.stopped .pipe-fill::after { animation: none; }
+  .pipe-fill.ok { background: linear-gradient(90deg, #16a34a, #4ade80); }
+  .pipe-fill.err { background: #dc2626; }
+  @keyframes shimmer { 100% { transform: translateX(100%); } }
+  .pipe-steps { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin-top: 16px; }
   .pstep { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
   .pstep .pico {
     width: 26px; height: 26px; border-radius: 50%;
@@ -229,7 +253,8 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 5px var(--brand-soft); } }
   .pseg { flex: 1; min-width: 24px; height: 2px; background: var(--line); margin: 0 10px; border-radius: 1px; transition: background 0.3s; }
   .pseg.done { background: var(--brand); }
-  .pipe-log { margin-top: 14px; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); min-height: 19px; }
+  .pipe-log { margin-top: 14px; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); min-height: 19px; white-space: pre-wrap; word-break: break-all; }
+  .pipe-log.err { color: #dc2626; }
 
   /* 笔记历史 */
   .notes-sec { max-width: 780px; margin: 44px auto 60px; }
@@ -441,6 +466,11 @@
       </div>
 
       <div class="pipeline" id="pipeline">
+        <div class="pipe-head">
+          <span class="pipe-title" id="pipeTitle">正在整理</span>
+          <span class="pipe-meta"><span class="pipe-pct" id="pipePct">0%</span><span class="pipe-timer" id="pipeTimer">00:00</span></span>
+        </div>
+        <div class="pipe-progress"><div class="pipe-fill" id="pipeFill"></div></div>
         <div class="pipe-steps" id="pipeSteps"></div>
         <div class="pipe-log" id="pipeLog"></div>
       </div>
@@ -651,10 +681,10 @@
   });
 
   /* ---------- 一键整理（正式接入后端 API） ---------- */
-  var STEPS = ["解析资源", "提取内容", "提炼重点", "生成笔记"];
-  var STEP_MAP = [0, 2, 3, 7]; /* 后端 step 值对应前端步骤 */
+  var STEPS = ["解析资源", "获取内容", "提炼重点", "生成笔记"];
   var busy = false;
   var API = "http://127.0.0.1:8766";
+  var pipeTimerInt = null, pipeT0 = 0;
 
   function buildPipeline() {
     var box = $("#pipeSteps"); box.innerHTML = "";
@@ -670,23 +700,53 @@
     });
   }
 
-  function setStepDisplay(serverStep) {
-    /* 后端 step 0-1=解析, 2-3=提取, 4=提炼, 5-7=生成 */
-    var frontStep = 0;
-    if (serverStep >= 2 && serverStep <= 3) frontStep = 1;
-    else if (serverStep == 4) frontStep = 2;
-    else if (serverStep >= 5) frontStep = 3;
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+  function startPipeTimer() {
+    stopPipeTimer();
+    pipeT0 = Date.now();
+    $("#pipeTimer").textContent = "00:00";
+    pipeTimerInt = setInterval(function () {
+      var s = Math.floor((Date.now() - pipeT0) / 1000);
+      $("#pipeTimer").textContent = pad2(Math.floor(s / 60)) + ":" + pad2(s % 60);
+    }, 1000);
+  }
+
+  function stopPipeTimer() {
+    if (pipeTimerInt) { clearInterval(pipeTimerInt); pipeTimerInt = null; }
+  }
+
+  function setPipelineProgress(pct, log) {
+    pct = Math.max(0, Math.min(100, pct || 0));
+    $("#pipePct").textContent = Math.round(pct) + "%";
+    $("#pipeFill").style.width = pct + "%";
+    if (log !== undefined && log !== null) $("#pipeLog").textContent = log;
+    /* 进度映射步骤: <8 解析 | 8-45 获取 | 45-70 提炼 | 70-100 生成 */
+    var frontStep = pct >= 100 ? 4 : pct >= 70 ? 3 : pct >= 45 ? 2 : pct >= 8 ? 1 : 0;
     for (var i = 0; i < STEPS.length; i++) {
       var el = $("#pstep" + i);
       if (!el) continue;
       el.classList.remove("doing", "done");
       if (i < frontStep) el.classList.add("done");
       else if (i == frontStep) el.classList.add("doing");
+      var ico = el.querySelector(".pico");
+      if (ico) ico.textContent = i < frontStep ? "\u2713" : String(i + 1);
     }
-    for (var j = 1; j <= frontStep; j++) {
+    for (var j = 1; j <= frontStep && j < STEPS.length; j++) {
       var seg = $("#seg" + j);
       if (seg) seg.classList.add("done");
     }
+  }
+
+  function resetPipelineState() {
+    var pl = $("#pipeline");
+    pl.classList.remove("stopped", "ok", "err");
+    $("#pipeTitle").textContent = "正在整理";
+    $("#pipeTitle").className = "pipe-title";
+    $("#pipePct").className = "pipe-pct";
+    $("#pipeLog").className = "pipe-log";
+    $("#pipeFill").className = "pipe-fill";
+    setPipelineProgress(2, "正在连接本地服务…");
   }
 
   function runProcess(text, type) {
@@ -695,7 +755,8 @@
     btn.disabled = true; btn.firstChild.textContent = "整理中…";
     buildPipeline();
     $("#pipeline").classList.add("show");
-    $("#pipeLog").textContent = "正在连接本地服务…";
+    resetPipelineState();
+    startPipeTimer();
     $("#pipeline").scrollIntoView({ behavior: "smooth", block: "nearest" });
 
     fetch(API + "/api/process", {
@@ -712,8 +773,7 @@
     var timer = setInterval(function () {
       fetch(API + "/api/status?id=" + taskId).then(function (r) { return r.json(); }).then(function (task) {
         if (task.error) { clearInterval(timer); failFinish(task.error); return; }
-        setStepDisplay(task.step);
-        $("#pipeLog").textContent = task.log || "";
+        setPipelineProgress(task.progress || 0, task.log || "");
         if (task.done) {
           clearInterval(timer);
           finishReal(taskId, text, type, task.result || {});
@@ -739,22 +799,39 @@
     notes.unshift(note);
     save(LS.notes, notes);
     renderNotes(); renderRecent(); renderStats();
-    $("#pipeline").classList.remove("show");
-    $("#pipeLog").textContent = "";
+    /* 绿色完成态展示 1.6 秒后淡出，给用户明确的成功反馈 */
+    var nFiles = Object.keys(note.files).length;
+    setPipelineProgress(100, "\u2713 整理完成，共生成 " + nFiles + " 个文件，已加入我的笔记");
+    $("#pipeline").classList.add("stopped", "ok");
+    $("#pipeTitle").textContent = "整理完成";
+    $("#pipeTitle").className = "pipe-title ok";
+    $("#pipePct").className = "pipe-pct ok";
+    $("#pipeFill").className = "pipe-fill ok";
+    stopPipeTimer();
+    setTimeout(function () {
+      if (!busy) $("#pipeline").classList.remove("show");
+    }, 1600);
     var btn = $("#btnGo");
     btn.disabled = false; btn.firstChild.textContent = "一键整理";
     input.value = ""; paintBadge(); input.style.height = "auto";
     busy = false;
-    toast("整理完成！已生成 " + Object.keys(note.files).length + " 个文件");
+    toast("整理完成！已生成 " + nFiles + " 个文件");
   }
 
   function failFinish(msg) {
-    $("#pipeline").classList.remove("show");
-    $("#pipeLog").textContent = "";
+    /* 红色失败态保留展示，直到下一次整理开始，让用户看清失败原因 */
+    $("#pipeline").classList.add("stopped", "err");
+    $("#pipeTitle").textContent = "整理失败";
+    $("#pipeTitle").className = "pipe-title err";
+    $("#pipePct").className = "pipe-pct err";
+    $("#pipeFill").className = "pipe-fill err";
+    $("#pipeLog").className = "pipe-log err";
+    $("#pipeLog").textContent = msg;
+    stopPipeTimer();
     var btn = $("#btnGo");
     btn.disabled = false; btn.firstChild.textContent = "一键整理";
     busy = false;
-    toast("整理失败：" + msg);
+    toast("整理失败：" + String(msg).slice(0, 60));
   }
 
   $("#btnGo").addEventListener("click", function () {

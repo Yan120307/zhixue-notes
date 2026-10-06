@@ -186,7 +186,8 @@ def fetch_bilibili(args) -> int:
         "cid": cid,
         "title": info.get("title", ""),
         "part": part,
-        "duration": info.get("duration", 0),
+        # 注意：写分 P 的真实时长（多 P 视频的合集总时长会误导笔记显示）
+        "duration": page.get("duration") or info.get("duration", 0),
     })
 
     print("[3/4] 计算 WBI 签名并获取字幕列表 ...")

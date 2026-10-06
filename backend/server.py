@@ -394,6 +394,145 @@ def playwright_available():
     return _playwright_cache["ok"]
 
 
+_fw_cache = {}
+
+
+def faster_whisper_available():
+    """检测 faster-whisper 是否可用（缓存结果）"""
+    if "ok" not in _fw_cache:
+        try:
+            import importlib.util
+            _fw_cache["ok"] = importlib.util.find_spec("faster_whisper") is not None
+        except Exception:
+            _fw_cache["ok"] = False
+    return _fw_cache["ok"]
+
+
+def transcribe_video(url, task_dir, update):
+    """
+    无字幕视频：下载音频流 + faster-whisper 本地转写。
+    长任务：Popen 转写脚本，轮询进度文件实时回报。返回 (ok, srt_path, error)
+    """
+    script = os.path.join(SCRIPTS, "transcribe_audio.py")
+    if not os.path.exists(script):
+        return False, None, "转写脚本不存在"
+    prog_path = os.path.join(task_dir, "transcode_progress.json")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script, url, "--task-dir", task_dir],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=0x00000008 if os.name == "nt" else 0)
+    except Exception as e:
+        return False, None, str(e)[:150]
+
+    last_msg = ""
+    rc = None
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            break
+        try:
+            if os.path.exists(prog_path):
+                with open(prog_path, "r", encoding="utf-8") as f:
+                    pr = json.load(f)
+                pct = min(100.0, float(pr.get("percent") or 0))
+                stage = pr.get("stage")
+                msg = pr.get("message") or ""
+                if msg != last_msg:
+                    last_msg = msg
+                    if stage == "download":
+                        update(2, msg, progress=10 + pct * 0.15)
+                    elif stage == "transcribe":
+                        update(3, msg, progress=25 + pct * 0.20)
+        except Exception:
+            pass
+        time.sleep(2)
+
+    srt = os.path.join(task_dir, "transcript.srt")
+    if rc == 0 and os.path.exists(srt):
+        return True, srt, None
+    err = "音频转写进程异常退出"
+    try:
+        if os.path.exists(prog_path):
+            with open(prog_path, "r", encoding="utf-8") as f:
+                pr = json.load(f)
+            if pr.get("message"):
+                err = str(pr["message"])[:150]
+    except Exception:
+        pass
+    return False, None, err
+
+
+_fw_cache = {}
+
+
+def faster_whisper_available():
+    """检测 faster-whisper 是否可用（缓存结果）"""
+    if "ok" not in _fw_cache:
+        try:
+            import importlib.util
+            _fw_cache["ok"] = importlib.util.find_spec("faster_whisper") is not None
+        except Exception:
+            _fw_cache["ok"] = False
+    return _fw_cache["ok"]
+
+
+def transcribe_video(url, task_dir, update):
+    """
+    无字幕视频：下载音频流 + faster-whisper 本地转写。
+    长任务：Popen 转写脚本，轮询进度文件实时回报。返回 (ok, srt_path, error)
+    """
+    script = os.path.join(SCRIPTS, "transcribe_audio.py")
+    if not os.path.exists(script):
+        return False, None, "转写脚本不存在"
+    prog_path = os.path.join(task_dir, "transcode_progress.json")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script, url, "--task-dir", task_dir],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=0x00000008 if os.name == "nt" else 0)
+    except Exception as e:
+        return False, None, str(e)[:150]
+
+    last_msg = ""
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            break
+        try:
+            if os.path.exists(prog_path):
+                with open(prog_path, "r", encoding="utf-8") as f:
+                    pr = json.load(f)
+                pct = min(100.0, float(pr.get("percent") or 0))
+                stage = pr.get("stage")
+                msg = pr.get("message") or ""
+                if msg != last_msg:
+                    last_msg = msg
+                    if stage == "download":
+                        update(2, msg, progress=10 + pct * 0.15)
+                    elif stage == "transcribe":
+                        update(3, msg, progress=25 + pct * 0.20)
+                    elif stage == "done":
+                        pass
+        except Exception:
+            pass
+        time.sleep(2)
+
+    srt = os.path.join(task_dir, "transcript.srt")
+    if rc == 0 and os.path.exists(srt):
+        return True, srt, None
+    err = "音频转写进程异常退出"
+    try:
+        if os.path.exists(prog_path):
+            with open(prog_path, "r", encoding="utf-8") as f:
+                pr = json.load(f)
+            if pr.get("message"):
+                err = str(pr["message"])[:150]
+    except Exception:
+        pass
+    return False, None, err
+
+
 def export_anki(kmap_path, out_path):
     """knowledge_map → Anki 卡片 TSV"""
     script = os.path.join(SCRIPTS, "export_anki.py")
@@ -424,52 +563,67 @@ def process_task(task_id, url, fmts, type_info):
     task_dir = os.path.join(TASKS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
-    def update(step, log, done=False, result=None, error=None):
+    def update(step, log, done=False, result=None, error=None, progress=None):
+        d = {"step": step, "log": log, "done": done,
+             "result": result, "error": error, "ts": time.time()}
+        if progress is not None:
+            d["progress"] = progress
         with _lock:
-            _tasks[task_id].update({
-                "step": step, "log": log, "done": done,
-                "result": result, "error": error, "ts": time.time()
-            })
+            _tasks[task_id].update(d)
 
     title = None
     fail = None
     srt_items = []
     video_duration = 0
 
-    update(0, "正在识别资源类型…")
-    update(1, "已识别：%s" % type_info["name"])
+    update(0, "正在识别资源类型…", progress=3)
+    update(1, "已识别：%s" % type_info["name"], progress=8)
 
     type_key = type_info["key"]
 
     if type_key in ("bilibili", "youtube"):
-        update(2, "正在抓取字幕…")
+        update(2, "正在抓取字幕…", progress=10)
         ok, srt_path, msg = fetch_subtitles(url, task_dir, type_key)
         meta = _read_meta(task_dir) or {}
         title = meta.get("title")
         video_duration = meta.get("duration") or 0
         if ok:
             srt_items = parse_srt(srt_path)
-            update(3, "字幕抓取成功，共 %d 条，正在提炼重点…" % len(srt_items))
+            update(3, "字幕抓取成功，共 %d 条，正在提炼重点…" % len(srt_items), progress=45)
             if len(srt_items) < 8:
                 fail = "该视频字幕内容过少（%d 条），无法整理出有效笔记" % len(srt_items)
         else:
-            if type_key == "bilibili":
-                reason = ("该视频没有 CC 字幕（B站字幕需 UP 主上传），暂无法自动整理。"
-                          "建议：换一个带 CC 字幕的视频，或复制视频文稿粘贴到输入框")
+            if type_key == "bilibili" and faster_whisper_available():
+                # 无 CC 字幕 → 自动本地音频转写（faster-whisper）
+                update(2, "《%s》没有 CC 字幕，自动转入本地音频转写（下载音频中，请耐心等待）…" % str(title or "该视频")[:40], progress=10)
+                ok2, srt_path2, terr = transcribe_video(url, task_dir, update)
+                if ok2:
+                    srt_items = parse_srt(srt_path2)
+                    update(3, "音频转写完成，共 %d 条，正在提炼重点…" % len(srt_items), progress=45)
+                    if len(srt_items) < 8:
+                        fail = "转写内容过少（%d 条），可能该视频无语音内容" % len(srt_items)
+                else:
+                    fail = "《%s》无 CC 字幕且本地转写失败：%s。可复制视频文稿粘贴到输入框" % (
+                        str(title or "该视频")[:30], terr[:80])
             else:
-                reason = ("YouTube 字幕抓取失败（%s）。请确认已安装 yt-dlp，"
-                          "或复制文稿粘贴到输入框" % msg[:60])
-            if title:
-                reason = "《%s》%s" % (str(title)[:40], reason)
-            fail = reason
+                if type_key == "bilibili":
+                    reason = ("该视频没有 CC 字幕（B站字幕需 UP 主上传），且本机未安装 faster-whisper。"
+                              "安装后可自动转写音频：pip install faster-whisper；"
+                              "或复制视频文稿粘贴到输入框")
+                else:
+                    reason = ("YouTube 字幕抓取失败（%s）。请确认已安装 yt-dlp，"
+                              "或复制文稿粘贴到输入框" % msg[:60])
+                if title:
+                    reason = "《%s》%s" % (str(title)[:40], reason)
+                fail = reason
     elif type_key == "web":
-        update(2, "正在抓取网页正文…")
+        update(2, "正在抓取网页正文…", progress=12)
         ok, wtitle, paras, werr = fetch_webpage(url, task_dir)
         if wtitle:
             title = wtitle
         if ok and len(paras) >= 3:
             srt_items = [(0, p) for p in paras]
-            update(3, "正文抓取成功，共 %d 段，正在提炼重点…" % len(paras))
+            update(3, "正文抓取成功，共 %d 段，正在提炼重点…" % len(paras), progress=45)
         else:
             fail = werr or "网页正文抓取失败，请直接复制网页文字粘贴到输入框"
     elif type_key == "text":
@@ -480,7 +634,7 @@ def process_task(task_id, url, fmts, type_info):
         else:
             srt_items = [(0, s) for s in sents]
             title = re.sub(r"\s+", " ", url.strip())[:24]
-            update(3, "已接收 %d 句内容，正在提炼重点…" % len(sents))
+            update(3, "已接收 %d 句内容，正在提炼重点…" % len(sents), progress=45)
     elif type_key == "pan":
         fail = ("网盘分享链接暂不支持自动整理。"
                 "请打开分享链接复制资料文字，或直接粘贴视频链接到输入框")
@@ -498,7 +652,7 @@ def process_task(task_id, url, fmts, type_info):
     # LLM 增强（配置了 API Key 时自动启用）
     llm_on = llm_available()
     if llm_on and srt_items:
-        update(4, "大模型增强中：通俗解释 + 考点提炼…")
+        update(4, "大模型增强中：通俗解释 + 考点提炼…", progress=55)
         excerpt = " ".join(t for _, t in srt_items)[:4000]
         enhanced = llm_enhance_note(kmap, transcript_excerpt=excerpt, source_url=url)
         if enhanced:
@@ -507,7 +661,7 @@ def process_task(task_id, url, fmts, type_info):
         if summary:
             kmap["llm_summary"] = summary
     else:
-        update(4, "未配置大模型 API Key，使用基础提炼")
+        update(4, "未配置大模型 API Key，使用基础提炼", progress=52)
 
     kmap_path = os.path.join(task_dir, "knowledge_map.json")
     with open(kmap_path, "w", encoding="utf-8") as f:
@@ -518,12 +672,12 @@ def process_task(task_id, url, fmts, type_info):
     with open(notes_path, "w", encoding="utf-8") as f:
         f.write(notes_md)
 
-    update(4, "重点提炼完成，正在导出…")
+    update(4, "重点提炼完成，正在导出…", progress=70)
     files = {"notes.md": "notes.md", "knowledge_map.json": "knowledge_map.json"}
 
     if "pdf" in fmts:
         pdf_path = os.path.join(task_dir, "notes.pdf")
-        update(5, "正在生成 PDF…")
+        update(5, "正在生成 PDF…", progress=78)
         ok, msg = export_pdf(notes_path, pdf_path, img_base=task_dir)
         _log("export_pdf ok=%s msg=%s" % (ok, msg[:200]))
         if ok and os.path.exists(pdf_path):
@@ -531,7 +685,7 @@ def process_task(task_id, url, fmts, type_info):
 
     if "mindmap" in fmts:
         mm_path = os.path.join(task_dir, "mindmap.png")
-        update(6, "正在生成思维导图…")
+        update(6, "正在生成思维导图…", progress=88)
         ok, msg = gen_mindmap(kmap_path, mm_path)
         _log("gen_mindmap ok=%s msg=%s" % (ok, msg[:200]))
         if ok and os.path.exists(mm_path):
@@ -540,7 +694,7 @@ def process_task(task_id, url, fmts, type_info):
     # 视频关键帧截图（安装 playwright 后自动启用）
     if type_info["key"] in ("bilibili", "youtube") and kmap.get("chapters"):
         if playwright_available():
-            update(7, "正在截取重点画面…（playwright）")
+            update(7, "正在截取重点画面…（playwright）", progress=94)
             pts = []
             for ch in kmap.get("chapters", []):
                 for p in ch.get("points", []):
@@ -564,11 +718,11 @@ def process_task(task_id, url, fmts, type_info):
     # Anki 卡片（勾选了即生成）
     if "anki" in fmts:
         anki_path = os.path.join(task_dir, "anki_cards.txt")
-        update(7, "正在生成 Anki 卡片…")
+        update(7, "正在生成 Anki 卡片…", progress=94)
         if export_anki(kmap_path, anki_path):
             files["Anki卡片.txt"] = "anki_cards.txt"
 
-    update(7, "整理完成！" + ("（含 AI 通俗解释）" if llm_on else ""), done=True, result={
+    update(7, "整理完成！" + ("（含 AI 通俗解释）" if llm_on else ""), done=True, progress=100, result={
         "title": kmap.get("course_title", "学习笔记"),
         "files": files,
         "points": sum(len(c.get("points", [])) for c in kmap.get("chapters", [])),
