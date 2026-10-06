@@ -219,6 +219,14 @@ def transcribe(audio_path, task_dir, progress):
         for i, (start, text) in enumerate(items, 1):
             f.write("%d\n%s --> %s\n%s\n\n" % (
                 i, srt_timestamp(start), srt_timestamp(start + 4), text))
+
+    # 转写完成：删除音频媒体文件（用户约定：笔记生成后不留视频/音频）
+    try:
+        audio = os.path.join(task_dir, AUDIO_FILE)
+        if os.path.exists(audio):
+            os.remove(audio)
+    except Exception:
+        pass
     return out, len(items)
 
 

@@ -49,23 +49,53 @@ def _log(msg):
         f.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), msg))
 
 
+_URL_RE = re.compile(r"https?://\S+", re.I)
+
+
+def _strip_url(u):
+    return u.rstrip(".,;:!?)]}\"'】） “").strip()
+
+
 def detect_type(text):
+    """
+    识别任意输入：
+    - 嵌在任何文本里的视频/网盘链接都能提取出来（如网盘分享消息）
+    - 任意其他 URL 且以链接为主 → 网页抓取
+    - 长文本仅引用 URL → 按文本内容处理
+    """
     text = (text or "").strip()
     if not text:
         return None
-    if re.search(r"bilibili\.com|b23\.tv", text, re.I):
-        return {"key": "bilibili", "name": "B站视频"}
-    if re.search(r"youtube\.com|youtu\.be", text, re.I):
-        return {"key": "youtube", "name": "YouTube 视频"}
-    if re.search(r"pan\.baidu\.com|aliyundrive|alipan|quark|123pan|lanzou", text, re.I):
-        return {"key": "pan", "name": "网盘分享文件夹"}
-    if re.search(r"\.pdf(\?|$)", text, re.I):
-        return {"key": "pdf", "name": "PDF 文档"}
-    if re.search(r"\.(docx?|pptx?|md|txt)(\?|$)", text, re.I):
-        return {"key": "doc", "name": "文档资料"}
-    if re.search(r"^https?://", text, re.I):
-        return {"key": "web", "name": "网页文章"}
+    urls = [_strip_url(m.group(0)) for m in _URL_RE.finditer(text)]
+
+    if urls:
+        # 1) 视频站链接优先（纯链接或分享消息里嵌入的都算）
+        for u in urls:
+            if re.search(r"bilibili\.com|b23\.tv", u, re.I):
+                return {"key": "bilibili", "name": "B站视频", "url": u}
+            if re.search(r"youtube\.com|youtu\.be", u, re.I):
+                return {"key": "youtube", "name": "YouTube 视频", "url": u}
+        # 2) 网盘链接（常见云盘 / pan. 前缀 / /share/ 路径 / 校园网盘）
+        for u in urls:
+            if re.search(r"pan\.|aliyundrive|alipan|quark|123pan|lanzou|/share/|nwafu", u, re.I):
+                return {"key": "pan", "name": "网盘分享", "url": u}
+        # 3) PDF / 文档直链
+        for u in urls:
+            if re.search(r"\.pdf(\?|$)", u, re.I):
+                return {"key": "pdf", "name": "PDF 文档", "url": u}
+            if re.search(r"\.(docx?|pptx?|md|txt)(\?|$)", u, re.I):
+                return {"key": "doc", "name": "文档资料", "url": u}
+        # 4) 其余 URL：输入以链接为主（去掉 URL 后没剩多少字）→ 当网页抓取
+        rest = _URL_RE.sub("", text).strip(" ，。；、:：!！?？（）()【】】")
+        if len(rest) < 80:
+            return {"key": "web", "name": "网页文章", "url": urls[0]}
+        # 5) 长文本里仅引用了 URL → 按文本内容处理
     return {"key": "text", "name": "文本内容"}
+
+
+def _public_task(t):
+    """任务的可序列化视图（剔除线程同步对象）"""
+    return {k: v for k, v in t.items() if k not in ("confirm_event",)}
 
 
 def fetch_subtitles(url, out_dir, type_key):
@@ -171,15 +201,36 @@ def info_score(s):
 
 
 def _find_excerpt(sent, texts):
-    """在原始条目里找包含要点句的原文，返回该条目及相邻上下文"""
+    """在原始条目里找包含要点句的原文，返回该条目及相邻上下文（保序去重）"""
     key = sent[:10]
     for i, t in enumerate(texts):
         if key and key in t:
             out = [texts[max(0, i - 1)], t]
             if i + 1 < len(texts):
                 out.append(texts[i + 1])
-            return out
-    return texts[:2]
+            break
+    else:
+        out = texts[:2]
+    # 保序去重
+    seen, uniq = set(), []
+    for t in out:
+        if t not in seen and len(t.strip()) >= 6:
+            seen.add(t)
+            uniq.append(t)
+    return uniq or texts[:1]
+
+
+def _dedup_items(items):
+    """相邻重复条目合并（转写/字幕常见同句重复，避免摘录和要点重复）"""
+    out = []
+    last = None
+    for sec, text in items:
+        t = text.strip()
+        if last is not None and (t == last or (len(t) >= 10 and t in last) or (len(last) >= 10 and last in t)):
+            continue
+        out.append((sec, text))
+        last = t
+    return out
 
 
 def basic_extract(items, title="学习资源", max_chapters=10):
@@ -191,6 +242,7 @@ def basic_extract(items, title="学习资源", max_chapters=10):
     if not items:
         return {"course_title": title, "chapters": [], "has_timeline": False}
 
+    items = _dedup_items(items)
     secs = [s for s, _ in items]
     has_timeline = (max(secs) - min(secs)) >= 120
     kmap = {"course_title": title, "chapters": [], "has_timeline": has_timeline}
@@ -578,17 +630,38 @@ def process_task(task_id, url, fmts, type_info):
                 fail = "该视频字幕内容过少（%d 条），无法整理出有效笔记" % len(srt_items)
         else:
             if type_key == "bilibili" and faster_whisper_available():
-                # 无 CC 字幕 → 自动本地音频转写（faster-whisper）
-                update(2, "《%s》没有 CC 字幕，自动转入本地音频转写（下载音频中，请耐心等待）…" % str(title or "该视频")[:40], progress=10)
-                ok2, srt_path2, terr = transcribe_video(url, task_dir, update)
-                if ok2:
-                    srt_items = parse_srt(srt_path2)
-                    update(3, "音频转写完成，共 %d 条，正在提炼重点…" % len(srt_items), progress=45)
-                    if len(srt_items) < 8:
-                        fail = "转写内容过少（%d 条），可能该视频无语音内容" % len(srt_items)
+                # 无 CC 字幕 → 征得用户同意后下载音频本地转写（完成后自动删除媒体文件）
+                dur_sec = int(video_duration or 0)
+                audio_mb = dur_sec / 123.0
+                est_min = max(1, int(dur_sec / 180))
+                confirm_msg = (
+                    "《%s》没有 CC 字幕。\n\n"
+                    "将下载音频（约 %.0f MB）到本机，用本地模型转写（预计约 %d 分钟），"
+                    "全程不上传任何内容；笔记生成后音频文件会自动删除。\n\n是否继续？" % (
+                        str(title or "该视频")[:36], audio_mb, est_min))
+                with _lock:
+                    _tasks[task_id]["need_confirm"] = {"message": confirm_msg}
+                update(2, "等待确认：是否下载音频并本地转写？", progress=10)
+                ev = _tasks[task_id].get("confirm_event")
+                got = ev.wait(timeout=900) if ev else False
+                with _lock:
+                    _tasks[task_id]["need_confirm"] = None
+                    agreed = _tasks[task_id].get("confirm_agree")
+                if not got:
+                    fail = "长时间未确认，已自动取消。可换有 CC 字幕的视频，或复制文稿粘贴到输入框"
+                elif not agreed:
+                    fail = "已按您的选择取消转写。可换有 CC 字幕的视频，或复制文稿粘贴到输入框"
                 else:
-                    fail = "《%s》无 CC 字幕且本地转写失败：%s。可复制视频文稿粘贴到输入框" % (
-                        str(title or "该视频")[:30], terr[:80])
+                    update(2, "已确认，开始下载音频并本地转写…", progress=12)
+                    ok2, srt_path2, terr = transcribe_video(url, task_dir, update)
+                    if ok2:
+                        srt_items = parse_srt(srt_path2)
+                        update(3, "音频转写完成，共 %d 条，正在提炼重点…" % len(srt_items), progress=45)
+                        if len(srt_items) < 8:
+                            fail = "转写内容过少（%d 条），可能该视频无语音内容" % len(srt_items)
+                    else:
+                        fail = "《%s》无 CC 字幕且本地转写失败：%s。可复制视频文稿粘贴到输入框" % (
+                            str(title or "该视频")[:30], terr[:80])
             else:
                 if type_key == "bilibili":
                     reason = ("该视频没有 CC 字幕（B站字幕需 UP 主上传），且本机未安装 faster-whisper。"
@@ -620,8 +693,15 @@ def process_task(task_id, url, fmts, type_info):
             title = re.sub(r"\s+", " ", url.strip())[:24]
             update(3, "已接收 %d 句内容，正在提炼重点…" % len(sents), progress=45)
     elif type_key == "pan":
-        fail = ("网盘分享链接暂不支持自动整理。"
-                "请打开分享链接复制资料文字，或直接粘贴视频链接到输入框")
+        # 网盘链接：识别成功但自动下载受网盘限制，给出可操作的引导
+        u = (url or "").lower()
+        if "nwafu" in u or ".edu.cn" in u:
+            fail = ("已识别到校园网盘分享（该网盘通常仅校园网可达，自动下载受限）。\n"
+                    "建议：① 在校园网打开链接下载视频；② 复制视频文稿/字幕粘贴到输入框，"
+                    "即可自动整理出笔记")
+        else:
+            fail = ("已识别到网盘分享链接。网盘文件暂不支持自动下载。\n"
+                    "建议：① 下载后把视频文件拖入整理；② 复制视频文稿/字幕粘贴到输入框")
     else:  # pdf / doc
         fail = "PDF / Word 文档暂不支持自动抓取，请复制文档文字后粘贴到输入框"
 
@@ -745,17 +825,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not type_info:
                 self._json(400, {"error": "无法识别资源类型"})
                 return
+            # 识别时若提取出了具体资源 URL（如从分享消息中提取），优先使用
+            resource_url = type_info.pop("url", None) or url
             task_id = "t" + uuid.uuid4().hex[:12]
             with _lock:
                 _tasks[task_id] = {
                     "id": task_id, "step": 0, "log": "已创建任务",
                     "done": False, "ts": time.time(),
-                    "url": url[:200], "type": type_info["name"],
-                    "typeKey": type_info["key"], "fmts": fmts
+                    "url": resource_url[:300], "type": type_info["name"],
+                    "typeKey": type_info["key"], "fmts": fmts,
+                    "confirm_event": threading.Event(),
+                    "confirm_agree": None,
+                    "need_confirm": None
                 }
-            t = threading.Thread(target=process_task, args=(task_id, url, fmts, type_info), daemon=True)
+            t = threading.Thread(target=process_task, args=(task_id, resource_url, fmts, type_info), daemon=True)
             t.start()
             self._json(200, {"task_id": task_id, "type": type_info})
+            return
+        if path == "/api/task/confirm":
+            # 转写等重操作前的用户确认：POST {"id": <任务ID>, "agree": true/false}
+            body = self._read_body()
+            if body is None:
+                return
+            tid = (body.get("id") or "").strip()
+            agree = bool(body.get("agree"))
+            with _lock:
+                t = _tasks.get(tid)
+                if not t:
+                    self._json(404, {"error": "任务不存在"})
+                    return
+                t["confirm_agree"] = agree
+                ev = t.get("confirm_event")
+            if ev:
+                ev.set()
+            self._json(200, {"ok": True, "agree": agree})
             return
         if path == "/api/export/anki":
             # 按需生成 Anki 卡片：POST {"id": <任务ID>}
@@ -828,7 +931,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not task:
                 self._json(404, {"error": "任务不存在"})
                 return
-            self._json(200, task)
+            self._json(200, _public_task(task))
             return
         if path.startswith("/api/files/"):
             parts = path.split("/")
@@ -849,9 +952,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         ct = "application/json; charset=utf-8"
                     self.send_header("Content-Type", ct)
                     self.send_header("Content-Disposition", 'attachment; filename="%s"' % fname)
-                    with open(fpath, "rb") as f:
-                        self.end_headers()
-                        self.wfile.write(f.read())
+                    try:
+                        with open(fpath, "rb") as f:
+                            self.end_headers()
+                            self.wfile.write(f.read())
+                    except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+                        # 用户取消下载/页面刷新，忽略，不能让服务崩溃
+                        pass
                     return
             self._json(404, {"error": "文件不存在"})
             return
@@ -884,13 +991,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(404, {"error": "未知接口"})
 
     def _json(self, code, obj):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self._cors()
-        self.send_header("Content-Length", len(body))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self._cors()
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+            # 客户端中断（如页面刷新/取消下载），忽略即可，绝不能让服务崩溃
+            pass
 
 
 def main():
@@ -898,7 +1009,7 @@ def main():
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--host", default="127.0.0.1")
     args = ap.parse_args()
-    server = http.server.HTTPServer((args.host, args.port), Handler)
+    server = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print("智学笔记后端服务已启动: http://%s:%d" % (args.host, args.port))
     print("API:")
     print("  POST /api/process    启动整理任务")
@@ -907,6 +1018,7 @@ def main():
     print("  GET  /api/notes      列出已完成笔记")
     print("  GET  /api/read?id=&file=  读取文件内容")
     print("  POST /api/export/anki       按需生成 Anki 卡片")
+    print("  POST /api/task/confirm      重操作前的用户确认（如无字幕视频转写）")
     print("  POST /api/export/obsidian   按需写入 Obsidian Vault")
     print("脚本目录: %s" % SCRIPTS)
     print("任务目录: %s" % TASKS_DIR)

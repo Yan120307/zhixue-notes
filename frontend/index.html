@@ -305,6 +305,21 @@
     padding: 22px 26px; overflow-y: auto; font-size: 14px; line-height: 1.75;
     color: var(--ink); white-space: pre-wrap; word-break: break-word;
   }
+  /* 转写确认弹窗（重操作前征求用户同意） */
+  #confirmModal {
+    display: none; position: fixed; inset: 0; z-index: 95;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(2px);
+    align-items: center; justify-content: center; padding: 24px;
+  }
+  #confirmModal.show { display: flex; }
+  .confirm-box {
+    background: var(--surface); border-radius: 18px; max-width: 460px; width: 100%;
+    padding: 26px 28px; box-shadow: var(--shadow-lg); border: 1px solid var(--line);
+  }
+  .confirm-box h3 { margin: 0 0 14px; font-size: 17px; color: var(--ink); }
+  .confirm-msg { font-size: 14px; line-height: 1.75; color: var(--ink); white-space: pre-wrap; margin-bottom: 22px; }
+  .confirm-btns { display: flex; gap: 12px; justify-content: flex-end; }
+
   .nc-body { display: none; padding: 0 20px 18px; border-top: 1px dashed var(--line); margin: 0 0; }
   .note-card.open .nc-body { display: block; animation: fadeIn 0.25s ease; }
   .nc-body p { color: var(--muted); font-size: 13.5px; margin: 12px 0 4px; }
@@ -567,6 +582,16 @@
     <div class="preview-body" id="previewBody">加载中…</div>
   </div>
 </div>
+<div id="confirmModal">
+  <div class="confirm-box">
+    <h3>需要您的确认</h3>
+    <div class="confirm-msg" id="confirmMsg"></div>
+    <div class="confirm-btns">
+      <button class="btn-ghost" id="btnConfirmNo">取消</button>
+      <button class="btn-primary" id="btnConfirmYes">下载并转写</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function () {
@@ -774,13 +799,44 @@
       fetch(API + "/api/status?id=" + taskId).then(function (r) { return r.json(); }).then(function (task) {
         if (task.error) { clearInterval(timer); failFinish(task.error); return; }
         setPipelineProgress(task.progress || 0, task.log || "");
+        /* 重操作确认：展示弹窗等待用户选择（后端挂起中） */
+        if (task.need_confirm && task.need_confirm.message) {
+          showConfirm(taskId, task.need_confirm.message);
+        } else {
+          hideConfirm();
+        }
         if (task.done) {
           clearInterval(timer);
+          hideConfirm();
           finishReal(taskId, text, type, task.result || {});
         }
       }).catch(function (e) { /* 网络抖动，继续轮询 */ });
     }, 800);
   }
+
+  var confirmTaskId = null;
+  function showConfirm(taskId, msg) {
+    if (confirmTaskId === taskId && $("#confirmModal").classList.contains("show")) return;
+    confirmTaskId = taskId;
+    $("#confirmMsg").textContent = msg;
+    $("#confirmModal").classList.add("show");
+  }
+  function hideConfirm() {
+    $("#confirmModal").classList.remove("show");
+    confirmTaskId = null;
+  }
+  function sendConfirm(agree) {
+    var tid = confirmTaskId;
+    if (!tid) return;
+    hideConfirm();
+    toast(agree ? "已确认，开始下载并转写…" : "已取消转写");
+    fetch(API + "/api/task/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: tid, agree: agree })
+    }).catch(function () { toast("无法连接本地服务"); });
+  }
+  $("#btnConfirmYes").addEventListener("click", function () { sendConfirm(true); });
+  $("#btnConfirmNo").addEventListener("click", function () { sendConfirm(false); });
 
   function finishReal(taskId, text, type, result) {
     var now = Date.now();
