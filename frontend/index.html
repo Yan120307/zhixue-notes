@@ -419,6 +419,31 @@
     .side-head, .recent-list, .side-foot { display: none; }
     .hero { padding-top: 40px; }
   }
+
+  /* —— AI 配置区 —— */
+  .ai-state { font-size:12px; font-weight:400; padding:2px 9px; border-radius:10px;
+              background:rgba(128,128,128,.16); margin-left:8px; vertical-align:middle; }
+  .ai-state.on { background:rgba(46,160,90,.18); color:#2ea05a; }
+  .ai-state.off { background:rgba(220,120,60,.18); color:#d0783c; }
+  .ai-row { display:flex; align-items:center; gap:12px; margin:10px 0 4px; }
+  .ai-row > label { width:78px; flex:none; font-size:13px; opacity:.8; }
+  .ai-row > input, .ai-row > select {
+    flex:1; min-width:0; padding:9px 12px; border-radius:9px; font-size:13px;
+    border:1px solid rgba(128,128,128,.3); background:transparent; color:inherit; }
+  .ai-row > input:focus, .ai-row > select:focus { outline:none;
+    border-color:rgba(90,130,240,.7); }
+  .ai-hint { font-size:12px; opacity:.66; margin:2px 0 10px 90px; line-height:1.6; }
+  .ai-hint a { color:#5a82f0; }
+  .ai-hint code { background:rgba(128,128,128,.14); padding:1px 5px; border-radius:4px; }
+  .ai-result { margin-top:10px; font-size:13px; line-height:1.7; display:none;
+               padding:10px 12px; border-radius:9px; }
+  .ai-result.ok { display:block; background:rgba(46,160,90,.12); color:#2ea05a; }
+  .ai-result.bad { display:block; background:rgba(220,70,70,.12); color:#d04848; }
+  @media (max-width:640px){
+    .ai-row { flex-direction:column; align-items:stretch; gap:6px; }
+    .ai-row > label { width:auto; }
+    .ai-hint { margin-left:0; }
+  }
 </style>
 </head>
 <body>
@@ -564,6 +589,58 @@
           <div class="desc">填写 Obsidian Vault 的本地路径，笔记可一键写入（需启动本地后端）</div>
           <input class="vault-input" id="obsidianVault" type="text" placeholder="例如 D:\MyVault">
           <button class="btn-ghost" id="btnSaveVault" style="margin-left:10px;">保存路径</button>
+        </div>
+        <div class="set-block" id="aiBlock">
+          <h3>AI 大模型 <span id="aiState" class="ai-state">检测中…</span></h3>
+          <div class="desc">
+            接入后可获得「真正提炼知识点 + 一句话掌握 + 通俗解释 + 必背考点」。
+            不配置也能用（基础提炼），但质量差距明显，强烈建议接入。
+          </div>
+
+          <div class="ai-row">
+            <label>服务商</label>
+            <select id="aiProvider"></select>
+          </div>
+          <div class="ai-hint" id="aiProviderNote"></div>
+
+          <div class="ai-row">
+            <label>API Key</label>
+            <input id="aiKey" type="password" placeholder="粘贴你的 API Key（本地 Ollama 可留空）">
+          </div>
+          <div class="ai-hint">
+            获取地址：<a id="aiKeyUrl" href="#" target="_blank" rel="noopener">—</a>
+            ｜Key 只保存在本机 <code id="aiCfgPath">~/.zhixue-notes/config.json</code>，不会上传
+          </div>
+
+          <div class="ai-row">
+            <label>模型</label>
+            <input id="aiModel" type="text" list="aiModelList" placeholder="例如 Qwen/Qwen2.5-7B-Instruct">
+            <datalist id="aiModelList"></datalist>
+          </div>
+
+          <div class="ai-row">
+            <label>Base URL</label>
+            <input id="aiBase" type="text" placeholder="https://api.siliconflow.cn/v1">
+          </div>
+
+          <div class="ai-row">
+            <label>提炼强度</label>
+            <div class="seg-group" id="aiQuality" style="margin:0">
+              <button class="seg" data-q="fast">快速</button>
+              <button class="seg" data-q="standard">标准</button>
+              <button class="seg" data-q="deep">深度</button>
+            </div>
+          </div>
+          <div class="ai-hint">
+            快速＝只分章提炼要点；标准＝额外生成通俗解释（推荐）；深度＝再加易错点。
+          </div>
+
+          <div style="margin-top:14px">
+            <button class="btn-primary" id="btnAiSave">保存并测试</button>
+            <button class="btn-ghost" id="btnAiTest">仅测试连接</button>
+            <button class="btn-ghost" id="btnAiOff">关闭 AI</button>
+          </div>
+          <div id="aiTestResult" class="ai-result"></div>
         </div>
         <div class="set-block">
           <h3>数据管理</h3>
@@ -859,6 +936,7 @@
     notes.unshift(note);
     save(LS.notes, notes);
     renderNotes(); renderRecent(); renderStats();
+    setTimeout(syncNotes, 800);   // 稍后与后端对齐（拿到后端记录的格式与文件信息）
     /* 绿色完成态展示 1.6 秒后淡出，给用户明确的成功反馈 */
     var nFiles = Object.keys(note.files).length;
     setPipelineProgress(100, "\u2713 整理完成，共生成 " + nFiles + " 个文件，已加入我的笔记");
@@ -1154,9 +1232,244 @@
     toast(settings.obsidianVault ? "Vault 路径已保存" : "已清空 Vault 路径");
   });
 
+  /* ---------- 设置：AI 大模型接入（配置存后端，不再是环境变量） ---------- */
+  var aiConfig = null;      // 后端 public_config
+  var aiEditing = false;    // 用户是否正在编辑 Key（避免被刷新覆盖）
+
+  function aiSetState(text, cls) {
+    var el = $("#aiState");
+    if (!el) return;
+    el.textContent = text;
+    el.className = "ai-state" + (cls ? " " + cls : "");
+  }
+
+  function aiShowResult(ok, msg) {
+    var el = $("#aiTestResult");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.className = "ai-result " + (ok ? "ok" : "bad");
+  }
+
+  function aiFillProviders(cfg) {
+    var sel = $("#aiProvider");
+    if (!sel) return;
+    var list = cfg._provider_catalog || [];
+    sel.innerHTML = "";
+    list.forEach(function (p) {
+      var op = document.createElement("option");
+      op.value = p.id;
+      op.textContent = p.name + (p.free ? "（有免费额度）" : "");
+      sel.appendChild(op);
+    });
+    sel.value = (cfg.llm && cfg.llm.provider) || "siliconflow";
+    aiPaintProvider(cfg);
+  }
+
+  function aiCurrentProvider() {
+    var sel = $("#aiProvider");
+    if (!sel || !aiConfig) return null;
+    var id = sel.value;
+    var list = aiConfig._provider_catalog || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+
+  function aiPaintProvider(cfg) {
+    cfg = cfg || aiConfig;
+    var p = aiCurrentProvider();
+    if (!p) return;
+    $("#aiProviderNote").textContent = p.note || "";
+    var url = $("#aiKeyUrl");
+    if (p.key_url) { url.href = p.key_url; url.textContent = p.key_url; }
+    else { url.href = "#"; url.textContent = "无需 Key 或由你自行提供"; }
+    var dl = $("#aiModelList");
+    dl.innerHTML = "";
+    (p.models || []).forEach(function (m) {
+      var op = document.createElement("option");
+      op.value = m;
+      dl.appendChild(op);
+    });
+    // 切换服务商时，如果用户没手动改过 Base URL/模型，就跟着服务商走
+    if (!aiEditing) {
+      if (p.base_url) $("#aiBase").value = p.base_url;
+      $("#aiModel").value = (cfg.llm && cfg.llm.model) || p.default_model || "";
+    }
+  }
+
+  function aiPaintFromConfig(cfg) {
+    aiConfig = cfg;
+    var llm = cfg.llm || {};
+    aiFillProviders(cfg);
+    if (!aiEditing) {
+      $("#aiKey").value = "";
+      $("#aiKey").placeholder = llm.api_key_set
+        ? ("已保存：" + llm.api_key + "（留空表示不修改）")
+        : "粘贴你的 API Key（本地 Ollama 可留空）";
+    }
+    $("#aiBase").value = llm.base_url || "";
+    $("#aiModel").value = llm.model || "";
+    var q = llm.quality || "standard";
+    var segs = document.querySelectorAll("#aiQuality .seg");
+    for (var i = 0; i < segs.length; i++) {
+      segs[i].classList.toggle("on", segs[i].getAttribute("data-q") === q);
+    }
+    if (cfg._config_path) $("#aiCfgPath").textContent = cfg._config_path;
+    if (llm.active) {
+      aiSetState("已接入 · " + (llm.model || ""), "on");
+      aiShowResult(true, "当前生效模型：" + llm.model + "（" + llm.base_url + "）");
+    } else if (llm.api_key_set) {
+      aiSetState("已填 Key 未启用", "off");
+    } else {
+      aiSetState("未接入", "off");
+    }
+  }
+
+  function aiLoadConfig() {
+    aiSetState("检测中…", "");
+    fetch(API + "/api/config").then(function (r) { return r.json(); }).then(function (cfg) {
+      aiPaintFromConfig(cfg);
+    }).catch(function () {
+      aiSetState("后端未启动", "off");
+      aiShowResult(false, "读不到配置：请确认本地后端 server.py 正在运行（设置项需后端保存）。");
+    });
+  }
+
+  function aiPayload() {
+    var key = ($("#aiKey").value || "").trim();
+    var body = {
+      provider: $("#aiProvider").value,
+      model: ($("#aiModel").value || "").trim(),
+      base_url: ($("#aiBase").value || "").trim(),
+      enabled: true
+    };
+    if (key) body.api_key = key;      // 留空 = 不修改已保存的 Key
+    var qs = document.querySelectorAll("#aiQuality .seg.on");
+    if (qs.length) body.quality = qs[0].getAttribute("data-q");
+    return body;
+  }
+
+  $("#aiProvider").addEventListener("change", function () {
+    aiEditing = false;
+    $("#aiKey").value = "";
+    aiPaintProvider();
+  });
+  ["#aiModel", "#aiBase", "#aiKey"].forEach(function (sel) {
+    var el = $(sel);
+    if (el) el.addEventListener("input", function () { aiEditing = true; });
+  });
+  document.querySelectorAll("#aiQuality .seg").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("#aiQuality .seg").forEach(function (x) {
+        x.classList.remove("on");
+      });
+      b.classList.add("on");
+    });
+  });
+
+  $("#btnAiSave").addEventListener("click", function () {
+    var body = aiPayload();
+    if (!body.base_url) { aiShowResult(false, "请填写 Base URL"); return; }
+    if (!body.model) { aiShowResult(false, "请填写模型名"); return; }
+    aiShowResult(true, "正在保存并测试连接…");
+    fetch(API + "/api/config/save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.error) { aiShowResult(false, data.error); return; }
+      aiEditing = false;
+      aiPaintFromConfig(data.config || {});
+      return fetch(API + "/api/llm/test", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      }).then(function (r) { return r.json(); }).then(function (t) {
+        aiShowResult(!!t.ok, (t.ok ? "✅ 配置成功！" : "⚠️ 已保存，但连接测试未通过：") + t.message);
+        if (t.ok) aiLoadConfig();
+      });
+    }).catch(function () {
+      aiShowResult(false, "保存失败：无法连接本地后端（请确认 server.py 正在运行）");
+    });
+  });
+
+  $("#btnAiTest").addEventListener("click", function () {
+    aiShowResult(true, "正在测试连接…");
+    fetch(API + "/api/llm/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    }).then(function (r) { return r.json(); }).then(function (t) {
+      aiShowResult(!!t.ok, t.message || (t.ok ? "连接成功" : "连接失败"));
+    }).catch(function () { aiShowResult(false, "无法连接本地后端"); });
+  });
+
+  $("#btnAiOff").addEventListener("click", function () {
+    fetch(API + "/api/config/save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false })
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      aiEditing = false;
+      aiPaintFromConfig(data.config || {});
+      toast("已关闭 AI 增强，将使用基础提炼");
+    }).catch(function () { toast("无法连接本地后端"); });
+  });
+
+  /* ---------- 笔记列表：与后端同步（后端为准，合并本地） ---------- */
+  var notesSynced = false;
+
+  function noteFromBackend(n) {
+    return {
+      id: n.id,
+      title: n.title || "学习笔记",
+      src: n.src || "",
+      type: n.type || "",
+      typeKey: n.typeKey || "",
+      fmts: n.fmts || [],
+      time: (n.time || 0) * 1000,      // 后端是秒，前端用毫秒
+      demo: false,
+      files: n.files || {},
+      points: n.points || 0,
+      chapters: n.chapters || 0,
+      llm: !!n.llm,
+      fromDisk: !!n.from_disk
+    };
+  }
+
+  function syncNotes() {
+    fetch(API + "/api/notes").then(function (r) { return r.json(); }).then(function (data) {
+      var remote = (data.notes || []).map(noteFromBackend);
+      var byId = {};
+      remote.forEach(function (n) { byId[n.id] = n; });
+      // 本地有、后端没有的记录（后端清理过、或早期版本只存在浏览器里）保留
+      var localOnly = notes.filter(function (n) {
+        return n && n.id && !byId[n.id] && !n.demo;
+      });
+      var merged = remote.concat(localOnly);
+      merged.sort(function (a, b) { return (b.time || 0) - (a.time || 0); });
+      notes = merged;
+      save(LS.notes, notes);
+      notesSynced = true;
+      renderNotes(); renderRecent(); renderStats();
+    }).catch(function () {
+      // 后端没起来也能用：继续显示 localStorage 里的记录
+      notesSynced = false;
+    });
+  }
+
+  /* 从列表移除一份笔记（可选连文件一起删） */
+  function forgetNote(id, alsoFiles) {
+    fetch(API + "/api/notes/forget", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: id, delete_files: !!alsoFiles })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) { toast(d.error); return; }
+      notes = notes.filter(function (n) { return n.id !== id; });
+      save(LS.notes, notes);
+      renderNotes(); renderRecent(); renderStats();
+      toast(alsoFiles ? "已删除笔记与文件" : "已从列表移除（文件仍保留在磁盘）");
+    }).catch(function () { toast("无法连接本地后端"); });
+  }
+
   /* ---------- 初始化 ---------- */
   function renderAll() {
-    applyTheme(); paintFmts(); paintObsidianVault(); renderNotes(); renderRecent(); renderProfile(); renderStats();
+    applyTheme(); paintFmts(); paintObsidianVault(); renderNotes(); renderRecent(); renderProfile(); renderStats(); aiLoadConfig(); syncNotes();
   }
   renderAll();
 })();

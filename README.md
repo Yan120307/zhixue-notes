@@ -1,4 +1,4 @@
-﻿---
+---
 AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
@@ -40,10 +40,13 @@ AIGC:
 - **无字幕视频本地转写** — 检测到视频无 CC 字幕时弹窗征得同意后，下载音频 → 本地 faster-whisper 转写（不上传任何内容）→ 笔记生成后自动删除音频文件
 - **网页正文提取** — 零依赖正文抓取器，自动剔除导航/广告/评论噪声
 - **智能提炼** — 有时间轴按章节分段、无时间轴按内容分章，结构化知识图谱 + 原文摘录（自动去重）
-- **字幕自动抓取** — B站 WBI API 字幕抓取 + YouTube yt-dlp 自动字幕，无需手动下载
-- **AI 通俗解释**（可选） — 接入通义千问 / OpenAI，每个知识点生成「一句话掌握」+「生活化通俗解释」
-- **AI 考点提炼**（可选） — 自动生成 5-8 个必背考点清单
-- **失败诚实提示** — 内容不足/需要确认时明确说明，绝不生成空壳笔记
+- **字幕自动抓取** — B站 WBI API 字幕抓取 + YouTube yt-dlp 自动字幕；**支持短链 b23.tv、手机版链接、av 号、多 P 合集 `?p=N`**
+- **文档直链解析** — PDF / Word / txt 直链自动下载并抽取正文
+- **AI 增强提炼**（可选，强烈建议） — 网页设置里 **60 秒接入**任意 OpenAI 兼容大模型，
+  含 **Ollama 本地模型（完全免费、无需 Key、数据不出本机）**；
+  章节按内容主题划分、知识点标题由模型生成，每点配「一句话掌握 + 通俗解释」，并附必背考点
+- **无模型也能用** — 未接入时自动降级为启发式提炼（关键词加权 + 标题提炼），不生成空壳笔记
+- **失败诚实提示** — 内容不足/需要确认时明确说明原因与替代方案，绝不生成空壳笔记
 
 ### 交付格式（四件套）
 | 格式 | 说明 |
@@ -130,33 +133,52 @@ cd frontend && python -m http.server 8765
 
 > 提示：B站大部分教学视频没有 CC 字幕（需 UP 主上传），遇到无字幕视频会明确提示；此时可复制视频文稿粘贴到输入框，效果同样好
 
-## 🤖 配置大模型（可选）
+🤖 接入 AI 大模型（网页里 60 秒搞定，不用改环境变量、不用重启）
 
-配置后可获得 AI 通俗解释 + 考点提炼。未配置时自动降级为基础提炼，不影响使用。
+> **强烈建议接入**。不接入也能用，但接入后是质变：
+> 章节按**内容主题**划分、知识点标题是真正的概念名（如「WBI 签名的生成流程」）、
+> 每点配「一句话掌握 + 通俗解释」，并附必背考点清单。
 
-### 方式一：通义千问（推荐国内用户）
+**第 1 步**：打开平台 → 左下角「设置」→ 找到「AI 大模型」
+
+**第 2 步**：选服务商 → 粘贴 API Key → 点「保存并测试」
+
+| 服务商 | 费用 | 说明 |
+| --- | --- | --- |
+| 硅基流动 SiliconFlow | 送免费额度 | 国内直连，注册即用，**新手首选** |
+| **Ollama（本地模型）** | **完全免费** | `ollama pull qwen2.5:7b` 后选它，**无需 Key、数据不出本机** |
+| 智谱 GLM | `glm-4-flash` 免费档 | 想零成本用云端就选这个 |
+| 魔搭 ModelScope | 每日免费额度 | 绑定阿里云账号 |
+| DeepSeek 官方 | 付费，价格低 | 中文总结质量突出 |
+| OpenRouter / OpenAI | 部分免费 / 付费 | 需境外网络 |
+| 自定义 | — | 任何 OpenAI 兼容接口，填 Base URL + Key + 模型名 |
+
+**提炼强度**可选：快速（只提炼要点）／标准（＋通俗解释，默认）／深度（＋易错点）。
+
+配置保存在本机 `~/.zhixue-notes/config.json`，Key 不上传。
+
+<details>
+<summary>旧方式：环境变量仍然可用（Docker / 命令行推荐）</summary>
+
+环境变量优先级**低于**网页设置：
 
 ```bash
-# 获取 API Key: https://bailian.console.aliyun.com/ → API-KEY 管理 → 创建
-# Windows PowerShell
-$env:DASHSCOPE_API_KEY = "sk-你的Key"
+# 通义千问（阿里云百炼）：https://bailian.console.aliyun.com/ → API-KEY 管理
+export DASHSCOPE_API_KEY="sk-你的Key"      # Linux/macOS
+set DASHSCOPE_API_KEY=sk-你的Key            # Windows CMD
+$env:DASHSCOPE_API_KEY="sk-你的Key"         # Windows PowerShell
 
-# Linux/macOS
-export DASHSCOPE_API_KEY="sk-你的Key"
-```
-
-### 方式二：OpenAI
-
-```bash
+# OpenAI
 export OPENAI_API_KEY="sk-你的Key"
-# 可选：切换模型
-export ZHIXUE_LLM_MODEL="gpt-4o-mini"
+
+# 通用变量（可接任意 OpenAI 兼容服务）
+export ZHIXUE_LLM_API_KEY="sk-你的Key"
+export ZHIXUE_LLM_BASE_URL="https://api.siliconflow.cn/v1"
+export ZHIXUE_LLM_MODEL="Qwen/Qwen2.5-7B-Instruct"
 ```
 
-配置后重启 `server.py`，整理时流水线会显示「大模型增强中」，笔记将包含：
-- **一句话掌握**：用一句大白话概括每个知识点
-- **通俗解释**：生活化类比 + 零基础友好
-- **必背考点**：AI 生成的考试重点清单
+用环境变量时需重启 `server.py`。
+</details>
 
 ## 🧩 学习工具集成
 
@@ -185,6 +207,29 @@ pip install playwright && playwright install chromium
 - **网盘文件浏览**：网盘分享链接自动列出文件清单（需提取码的除外）
 
 > 未安装不影响其他功能：无字幕视频会明确提示安装方法，其余类型正常使用
+
+## ✅ 回归测试
+
+仓库自带一套回归测试（`dev/`），**193 项检查**，几秒到两分钟跑完，**全程不需要联网**
+（大模型与 HTTP 交互都用本地 mock 服务替代）。
+
+```bash
+python dev/run_tests.py            # 全部
+python dev/run_tests.py llm e2e    # 只跑指定几组
+```
+
+| 关键字 | 项数 | 覆盖 |
+| --- | --- | --- |
+| `config` | 23 | 配置读写、环境变量优先级、Key 打码、边界值、损坏文件容错 |
+| `netutil` | 40 | B站短链跳转、av→BV、多P `?p=N`、标题清洗、失败分支可读性 |
+| `docextract` | 23 | PDF/DOCX 字节流解析、多编码试探、BOM |
+| `llm` | 31 | 分块提炼、章节规划、JSON 容错、并发、降级 |
+| `server` | 55 | 全部 HTTP 接口、端到端整理、路径穿越防护、任务清理、历史重建 |
+| `e2e` | 21 | 接入大模型 → 整理 → 笔记落盘 |
+
+改动后端代码后建议先跑一遍。详见 [dev/README.md](dev/README.md)。
+
+---
 
 ## 📖 API 文档
 

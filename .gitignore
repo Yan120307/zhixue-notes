@@ -26,6 +26,7 @@ env/
 *.tmp
 *.log
 *.bak
+*.bak[0-9]
 
 # OS
 .DS_Store
@@ -36,3 +37,18 @@ desktop.ini
 .temp/zhixue-tasks/
 *.srt
 *.m4s
+*.m4a
+audio.*
+source_media.*
+
+# 本地配置（可能含 API Key，绝不能提交）
+config.json
+.zhixue-notes/
+*.local
+
+# 测试产物
+dev/_work/
+dev/**/_work/
+dev/**/.zhixue-notes/
+.coverage
+htmlcov/

@@ -107,7 +107,12 @@ def _probe_total(url, headers):
 
 
 def download_audio(bvid, task_dir, progress):
-    """分块 Range 下载最低码率音频流（B站匿名完整 GET 会被截断，必须分块）"""
+    """
+    分块 Range 下载最低码率音频流（B站匿名完整 GET 会被截断，必须分块）。
+
+    已知限制：本函数只走 B 站 playurl 接口，因此**仅支持 B 站视频**。
+    YouTube 无字幕时不在本脚本处理范围内，需要 yt-dlp 下载音频后才能转写。
+    """
     audio_path = os.path.join(task_dir, AUDIO_FILE)
     if os.path.exists(audio_path) and os.path.getsize(audio_path) > 100_000:
         write_progress(task_dir, "transcribe", 0, "音频已就绪（上次下载），开始转写")

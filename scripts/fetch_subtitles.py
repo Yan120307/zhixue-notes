@@ -167,13 +167,22 @@ def fetch_bilibili(args) -> int:
 
     print(f"[1/4] 获取视频信息: {bvid}")
     info = get_video_info(bvid)
-    title = re.sub(r'[\\/:*?"<>|]', "_", info["title"])
+    # 部分稿件（番剧/互动视频）没有 pages 字段，退化成单 P，避免 KeyError
+    if not info.get("pages"):
+        info["pages"] = [{"cid": info.get("cid"), "part": info.get("title") or "",
+                          "duration": info.get("duration") or 0}]
+    title = re.sub(r'[\\/:*?"<>|]', "_", info.get("title") or "video")
     pages = info["pages"]
     if args.cid:
-        pages = [p for p in pages if p["cid"] == args.cid]
-        if not pages:
-            print(f"错误: 未找到 cid={args.cid} 的分P")
+        # 先按 cid 值精确匹配；匹配不到再当"第几 P"处理（1 起），
+        # 兼容后端既可传 cid 也可传序号的两种用法
+        picked = [p for p in pages if p.get("cid") == args.cid]
+        if not picked and 1 <= args.cid <= len(pages):
+            picked = [pages[args.cid - 1]]
+        if not picked:
+            print(f"错误: 未找到 cid/分P={args.cid}（该视频共 {len(pages)} P）")
             return 1
+        pages = picked
     page = pages[0]
     cid = page["cid"]
     part = page.get("part") or title
@@ -252,7 +261,8 @@ def main():
     ap.add_argument("input", help="视频URL")
     ap.add_argument("--out-dir", default=".", help="输出目录")
     ap.add_argument("--fmt", choices=["txt", "srt", "json"], default="txt")
-    ap.add_argument("--cid", type=int, default=None, help="指定分P的cid")
+    ap.add_argument("--cid", type=int, default=None,
+                    help="指定分P：既可传 cid 值，也可传分P序号（1 起）")
     ap.add_argument("--meta-out", default=None, help="视频元信息写入指定 JSON 文件（供后端读取真实标题）")
     args = ap.parse_args()
 
