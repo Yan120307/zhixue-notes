@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '78d633fd-6a8a-4929-9f21-4719ed6f8bfc'
-  PropagateID: '78d633fd-6a8a-4929-9f21-4719ed6f8bfc'
-  ReservedCode1: 'c4087769-4cf8-461b-8bc8-23b8ef8d6a9e'
-  ReservedCode2: 'c4087769-4cf8-461b-8bc8-23b8ef8d6a9e'
+  ProduceID: '9d25e40e-d06f-4b40-bf64-8a674ee15b1e'
+  PropagateID: '9d25e40e-d06f-4b40-bf64-8a674ee15b1e'
+  ReservedCode1: '6c98714c-a885-4880-8a3c-c1dcf654b671'
+  ReservedCode2: '6c98714c-a885-4880-8a3c-c1dcf654b671'
 ---
 
 # 智学笔记 (ZhiXue Notes)
@@ -23,7 +23,8 @@ AIGC:
 [![python](https://img.shields.io/badge/Python-3.8+-blue.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![html](https://img.shields.io/badge/HTML5-CSS3-JS-orange.svg?style=flat-square&logo=html5&logoColor=white)](https://developer.mozilla.org/)
 [![platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)]()
-[![release](https://img.shields.io/badge/Release-v1.2-blueviolet.svg?style=flat-square)]()
+[![release](https://img.shields.io/badge/Release-v1.3-blueviolet.svg?style=flat-square)]()
+[![manual](https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C-docs%2F%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md-brightgreen.svg?style=flat-square)](docs/%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md)
 [![issues](https://img.shields.io/github/issues/Yan120307/zhixue-notes.svg?style=flat-square&color=orange)](https://github.com/Yan120307/zhixue-notes/issues)
 
 **[功能特性](#-功能特性) · [效果展示](#-效果展示) · [快速开始](#-快速开始) · [配置大模型](#-配置大模型可选) · [学习工具集成](#-学习工具集成) · [API 文档](#-api-文档) · [路线图](#-路线图)**
@@ -194,6 +195,8 @@ pip install playwright && playwright install chromium
 | `/api/files/{id}/{filename}` | GET | 下载结果文件（md/pdf/png/json） |
 | `/api/notes` | GET | 列出所有已完成笔记 |
 | `/api/read?id=&file=notes.md` | GET | 读取笔记内容（在线预览用） |
+| `/api/upload` | POST | 上传本地音视频文件（multipart，上限 1GB，转写整理） |
+| `/api/task/confirm` | POST | 重操作前用户确认，body: `{"id": "...", "agree": true}` |
 | `/api/export/anki` | POST | 按需生成 Anki 卡片，body: `{"id": "..."}` |
 | `/api/export/obsidian` | POST | 写入 Obsidian Vault，body: `{"id": "...", "vault": "D:\\MyVault", "folder": "ZhixueNotes"}` |
 
@@ -274,10 +277,13 @@ zhixue-notes/
 - [x] 网盘文件夹批量浏览
 - [x] Anki 卡片导出
 - [x] Obsidian Vault 直接写入
-- [x] 无字幕视频本地转写（faster-whisper）
+- [x] 无字幕视频本地转写（faster-whisper，转写前征得用户同意，完成后删除媒体）
+- [x] 本地视频/音频文件拖入整理（网盘视频可靠通道）
+- [x] 任意链接自动识别（含混合文本提取链接）
 - [x] 整理进度可视化（总进度条 + 步骤指示 + 实时耗时）
 - [ ] 浏览器插件（一键收藏当前页面）
 - [ ] 多 P 视频整合集整理
+- [ ] 转写质量升级（medium 模型可选）
 
 ## 🤝 贡献指南
 
